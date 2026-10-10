@@ -1,0 +1,38 @@
+# Configuration for Eastern Bering Sea Unified Environmental Data Cube
+region_name = "bering_sea"
+resolution_deg = 0.08333333333333333
+
+[domain]
+lon_min = -179.0
+lon_max = -157.0
+lat_min = 54.0
+lat_max = 66.0
+
+# Temporal mode: "climatology", "timeseries", or "hybrid"
+time_mode = "climatology"
+time_step = "climatology_monthly"
+climatology_months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+[sources]
+bathymetry = "etopo"
+physics = "glorys12v1"
+bgc = "woa23"
+
+variables = [
+    "elevation",
+    "bottom_depth",
+    "temperature",
+    "salinity",
+    "u",
+    "v",
+    "dissolved_oxygen",
+    "oxygen_saturation",
+    "ph",
+    "nitrate",
+    "phosphate",
+    "silicate",
+    "chlorophyll_a"
+]
+
+output_path = "data/cubes/bering_sea_environmental.zarr"
+compressor = "zstd"

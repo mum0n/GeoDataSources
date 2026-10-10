@@ -1,0 +1,104 @@
+# Configuration for Scotian Shelf Unified Environmental Data Cube
+region_name = "scotian_shelf"
+# 1 km: the resolution the survey analysis found adequate for this shelf. Expressed in
+# kilometres rather than degrees because a degree of longitude is not a degree of latitude,
+# and only one of those is a square cell.
+resolution_km = 1.0
+resolution_deg = 0.08333333333333333
+
+# Which variables the cube carries.
+variables = [
+    # Sea floor: CHS 15-arc-second soundings in preference to the global ETOPO model,
+    # because these are survey soundings of this shelf rather than a model of it.
+    "elevation",
+    "bottom_depth",
+    # Substrate, from the interpolated grain-size surface shipped as tier-1 raw data.
+    "substrate",
+    # Benthic temperature: surveyed (1970-2025, 30 programmes) supplemented by GLORYS
+    # where the surveys have gaps. Where the two overlap, the survey wins - it is a
+    # measurement, and GLORYS is a model of one.
+    "bottom_temperature",
+    # The surveys' own bottom-depth soundings, kept separate from the NWA soundings above.
+    # Reconciling the two happens in the model project, not in the loader.
+    "survey_depth",
+    # Water column and biogeochemistry, from the model and climatology sources. Which source
+    # each one comes from is set in [sources] below, so a run can mix reanalysis and
+    # climatology per variable.
+    "temperature",
+    "salinity",
+    "u",
+    "v",
+    "dissolved_oxygen",
+    "oxygen_saturation",
+    "ph",
+    "nitrate",
+    "phosphate",
+    "silicate",
+    "chlorophyll_a"
+]
+
+# Temporary (tables must come after scalar keys in TOML).
+output_path = "data/cubes/scotian_shelf_environmental.zarr"
+compressor = "zstd"
+
+# Temporal mode: "climatology", "timeseries", or "hybrid"
+time_mode = "climatology"
+time_step = "climatology_monthly"
+climatology_months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+# Per-variable source choice. This is the level at which a decision is actually made:
+# a run can take temperature from a reanalysis and oxygen from a climatology, and a
+# source that does not carry a variable simply does not supply it rather than being
+# substituted silently.
+#
+# Each entry is a table with:
+#   source: the source key from DATA_SOURCES (src/manifest.jl)
+#   tier:   optional, where in the raw/discretized/modelled/cube chain the data sit
+#
+# Omitting an entry uses the default in CUBE_VARIABLE_SOURCES (src/regional_cube.jl).
+[sources]
+# Water column temperature and salt. WOA23 is a climatology (multi-decadal monthly means,
+# no year axis, no day-of-year beyond 12 bins), so it drives climatological runs but
+# cannot carry a year, weather, or eddies. GLORYS12V1 is the reanalysis that does; it is
+# declared in DATA_SOURCES as `tier = :modelled` but is currently UNBUILDABLE (no
+# entry in MODELLERS), so it cannot be selected yet - which is why this config uses
+# WOA23. Switch to `temperature = {source = "glorys", tier = "modelled"}` once the
+# modeller exists. `data_summary()` reports UNBUILDABLE sources.
+temperature = {source = "hydrography", tier = "discretized"}
+salinity = {source = "hydrography", tier = "discretized"}
+
+# Velocities. "lateral_boundary" is the open-boundary source; it is the one that carries
+# currents, which is why it is not the temperature source.
+u = {source = "lateral_boundary", tier = "modelled"}
+v = {source = "lateral_boundary", tier = "modelled"}
+
+# Benthic temperature comes from the tier-1 surveys, which are measurements, not a model.
+bottom_temperature = {source = "bottom_temperature", tier = "raw"}
+survey_depth = {source = "bottom_temperature", tier = "raw"}
+substrate = {source = "substrate", tier = "discretized"}
+
+# Sea floor: CHS soundings of this shelf, not the global ETOPO model.
+elevation = {source = "nwa_bathymetry", tier = "discretized"}
+bottom_depth = {source = "nwa_bathymetry", tier = "discretized"}
+
+# Water-column BGC: the WOA climatology. Variables a source does not carry (chlorophyll is
+# not in WOA23) are recorded as absent in the cube's provenance rather than fabricated.
+dissolved_oxygen = {source = "woa23"}
+oxygen_saturation = {source = "woa23"}
+ph = {source = "woa23"}
+nitrate = {source = "woa23"}
+phosphate = {source = "woa23"}
+silicate = {source = "woa23"}
+chlorophyll_a = {source = "woa23"}
+
+# Historical time series options (for time_mode = "timeseries")
+# start_date = "1993-01-01"
+# end_date = "2023-12-31"
+
+# The domain table comes last on purpose: everything after a [table] header in TOML is
+# read as a key of that table, not of the document.
+[domain]
+lon_min = -71.0
+lon_max = -53.0
+lat_min = 40.0
+lat_max = 48.5

@@ -1,0 +1,38 @@
+# Configuration for Newfoundland & Grand Banks Unified Environmental Data Cube
+region_name = "newfoundland_grand_banks"
+resolution_deg = 0.08333333333333333
+
+[domain]
+lon_min = -58.0
+lon_max = -46.0
+lat_min = 42.0
+lat_max = 52.0
+
+# Temporal mode: "climatology", "timeseries", or "hybrid"
+time_mode = "climatology"
+time_step = "climatology_monthly"
+climatology_months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+[sources]
+bathymetry = "etopo"
+physics = "glorys12v1"
+bgc = "woa23"
+
+variables = [
+    "elevation",
+    "bottom_depth",
+    "temperature",
+    "salinity",
+    "u",
+    "v",
+    "dissolved_oxygen",
+    "oxygen_saturation",
+    "ph",
+    "nitrate",
+    "phosphate",
+    "silicate",
+    "chlorophyll_a"
+]
+
+output_path = "data/cubes/newfoundland_grand_banks_environmental.zarr"
+compressor = "zstd"

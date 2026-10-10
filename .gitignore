@@ -1,0 +1,23 @@
+﻿# Generated tiers: everything above `data/raw/` is build output.
+# Tier 1 (`data/raw/`) is committed; the rest is reproducible.
+/data/ingested/
+/data/discretized/
+
+# Runs and caches
+/scratch/
+/test/scratch/
+/inputs/
+*.part
+
+# Outputs
+*.nc
+*.zarr
+*.parquet
+*.tsv
+
+# Configs that contain machine-specific paths
+resolved_config.toml
+work/
+
+
+/.venv/
