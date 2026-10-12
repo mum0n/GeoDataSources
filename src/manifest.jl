@@ -328,6 +328,7 @@ cached, what its alternatives are) and, if it needs more than a URL, add one lin
 const FETCHERS = Dict{Symbol, Function}(
     :bathymetry       => _fetcher_erddap_bathymetry,
     :atmosphere       => _fetcher_open_meteo_winds,
+    :surface_winds    => _fetcher_open_meteo_winds,
     :hydrography      => _fetcher_woa23,
     :woa23            => _fetcher_woa23,
     :coastline        => _fetcher_natural_earth_coastline,
@@ -509,31 +510,37 @@ end
     data_provenance(
         output_dir::AbstractString;
         config_path::AbstractString = "",
-        data_sources::AbstractDict{Symbol, DataSource} = Dict{Symbol, DataSource}(),
-        extra::AbstractDict = Dict{String, Any}()
+        data_sources::Union{Nothing, AbstractDict{Symbol, DataSource}} = nothing,
+        extra::AbstractDict = Dict{String, Any}(),
     ) -> String
 
 Write `data_provenance.json` into `output_dir`, recording every declared input with the exact
 file that backs it, and return the path.
 
-For each data source the record carries the source, the cache path, whether the
-cached file is present, its size in bytes, and its SHA-256.
+For each data source the record carries the source, the cache path, whether the cached file is
+present, its size in bytes, and its SHA-256.
 
 This is deliberately a *separate* file from `resolved_config.toml`. The resolved config records
 what was *asked for*; this records what was *actually read*. When a run degrades, or a cached
 artefact is stale, those two diverge, and the divergence is the point.
+
+`data_sources` defaults to the whole declared registry rather than to an empty set. The
+docstring promises every declared input, and a caller that passes nothing should get exactly
+that; a caller recording a subset -- one scenario's inputs, say -- passes it explicitly.
 """
 function data_provenance(
     output_dir::AbstractString;
     config_path::AbstractString = "",
-    data_sources::AbstractDict{Symbol, DataSource} = Dict{Symbol, DataSource}(),
-    extra::AbstractDict = Dict{String, Any}()
+    data_sources::Union{Nothing, AbstractDict{Symbol, DataSource}} = nothing,
+    extra::AbstractDict = Dict{String, Any}(),
 )
     isdir(output_dir) || mkpath(output_dir)
 
+    sources = something(data_sources, DATA_SOURCES)
     inputs = Dict{String, Any}()
-    for key in sort!(collect(keys(data_sources)); by = string)
-        d = data_sources[key]
+
+    for key in sort!(collect(keys(sources)); by = string)
+        d = sources[key]
         rel = replace(d.cache, "<output_dir>" => output_dir)
         present = isdir(rel) || isfile(rel)
         size_bytes = 0
@@ -563,7 +570,7 @@ function data_provenance(
         "package_version" => string(VERSION),
         "input_dir" => replace(input_dir(output_dir), '\\' => '/'),
         "inputs" => inputs,
-    ),
+    )
     for (k, v) in extra
         record[k] = v
     end
@@ -708,6 +715,29 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
 
     ),
 
+    :surface_winds => DataSource(
+        :surface_winds,
+        "ERA5 surface winds from Open-Meteo (wind stress for the model)",
+        :gridded, true,
+        "https://archive-api.open-meteo.com/v1/archive (ERA5 subset)",
+        [
+            "ERA5 from the Copernicus Climate Data Store: https://cds.climate.copernicus.eu (keyless for the public ERA5 subset).",
+            "Global Wind Atlas: https://globalwindatlas.info (keyless, climatological only).",
+            "The SAME physical product `:atmosphere` carries. That entry describes the whole surface state -- stress plus air temperature, pressure, humidity, cloud and shortwave -- while this one names the winds alone, because that is what `[data] wind_source` and `[atmosphere] forcing` select and what `inputs/surface_winds.zarr` holds. Two keys, one dataset: the registry is keyed by what a run can ask for, not by how many files exist.",
+        ],
+        "<output_dir>/inputs/surface_winds.zarr",
+        "Public domain (Copernicus ERA5 / Open-Meteo).",
+        "Fetched by `fetch_open_meteo_winds` with the ERA5 surface state ingested alongside the " *
+        "stress on the same hourly time axis, so stress and heat flux vary in time together. " *
+        "They do NOT vary in space: Open-Meteo's archive endpoint answers with one " *
+        "representative point per request, so the field is a box value repeated across the " *
+        "domain. A run that needs resolved atmospheric structure needs a gridded product. " *
+        "Configured by [atmosphere] forcing."
+        ,
+        tier = :modelled,
+
+    ),
+
     :atmosphere => DataSource(
         :atmosphere,
         "Atmospheric surface forcing (wind stress, heat flux)",
@@ -734,49 +764,26 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
 
     :lateral_boundary => DataSource(
         :lateral_boundary,
-        "Open-boundary ocean state for the sponge layers",
-        :gridded, true,
-        "https://tds.hycom.org/thredds/catalog/FMRC_ESPC-D-V02_uv3z/catalog.html",
+        "Open-boundary ocean state for the sponge layers (GLORYS12V1, via Copernicus)",
+        :gridded, false,
+        "https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_PHY_001_030",
         [
-            "PROBED 2026-09-29, STRUCTURE CONFIRMED BUT DATA PATH REFUSED. HYCOM GOFS 1/12 " *
-            "degree analysis, served over OPeNDAP from tds.hycom.org with no account, no " *
-            "key and no registration. Three datasets were confirmed to exist by reading " *
-            "their .dds: FMRC_ESPC-D-V02_uv3z (water_u, water_v), FMRC_ESPC-D-V02_t3z " *
-            "(water_temp) and FMRC_ESPC-D-V02_s3z (salinity), each 121 time x 40 depth x " *
-            "4251 lat x 4500 lon, i.e. 0.0833 degree -- the same grid as GLORYS12, and it " *
-            "carries velocities, which is what a sponge actually needs. However every " *
-            "constrained data request returns HTTP 400 'Unrecognized request', including " *
-            "the exact form TDS's own access page generates, while .dds/.das/.html all " *
-            "return 200. Dropping the .ncd suffix 404s, which rules out a malformed URL on " *
-            "our side. So the route is genuinely keyless but currently unusable, and " *
-            "keyless stays false: that flag is read as 'this input can be retrieved with " *
-            "nothing but a network connection', and right now it cannot be retrieved.",
-            "Why currents matter here. A sponge relaxes toward boundary values; if only " *
-            "temperature and salinity are constrained, the inflow velocity -- the thing " *
-            "that sets how much water and how much heat the domain receives -- stays at " *
-            "whatever the interior happens to do, and the open edge is not really open. " *
-            "WOA23 climatology cannot supply this, which is why the boundary input has " *
-            "been the weak point rather than the bathymetry or the hydrography.",
-            "GLORYS12V1 direct from Copernicus Marine, product GLOBAL_MULTIYEAR_PHY_001_030. " *
-            "KNOWN WORKING, but needs a free account and " *
-            "~/.copernicusmarine/credentials with a uid and key; without them the subset " *
-            "service returns 401. Reachable through the `copernicusmarine` package, which " *
-            "this project already calls for the wind and hydrography paths, so the code " *
-            "exists; only the credentials are missing.",
-            "NCAR GDEX holds a keyless record for GLORYS12V1 (d010049, DOI 10.5065/3NSD-QP06) " *
-            "with 'Access Constraints: None', but its dataset catalog is empty -- no " *
-            "files -- so it does not serve data. A metadata record is not a served file.",
+            "VERIFIED 2026-10-11 BY READING THE CODE, NOT THE NETWORK. The fetcher registered for this input is `_fetcher_copernicus_physics` -> `fetch_copernicus_physics_subset`, whose dataset id defaults to GLOBAL_MULTIYEAR_PHY_001_030 -- that is GLORYS12V1. So this entry's primary was wrong: it named a HYCOM OPeNDAP catalog that no code here ever requests, and named a fetcher `fetch_hycom_boundary` that does not exist in this repository. Verified by searching every package for that symbol: it appears only in these notes.",
+            "The earlier note claimed every HYCOM data request returned HTTP 400 and that .dds/.das/.html returned 200. That probe was never re-checked and is not the basis of this entry any more: what matters is what the code does, and the code asks Copernicus for GLORYS.",
+            "GLORYS12V1 requires a free Copernicus Marine account and ~/.copernicusmarine/credentials (uid and key). Without them the subset service returns 401. This machine has credentials, so the fetch works here; a fresh checkout will NOT work until `copernicusmarine login` is run. That is why `keyless` is false and not a comment.",
+            "Scope limit, verified from the fetcher's own command: it requests only `--variable thetao --variable so`. It does NOT request u/v. So this input constrains temperature and salinity at the sponge, not the normal velocity, and the earlier note's claim that it 'carries velocities, which is what a sponge actually needs' does not hold for the subset actually taken. The open edge is still only as open as the relaxation constants in [boundaries] u_inflow/v_inflow.",
+            "NCAR GDEX holds a keyless record for GLORYS12V1 (d010049, DOI 10.5065/3NSD-QP06) with 'Access Constraints: None', but its dataset catalog is empty -- no files -- so it does not serve data. A metadata record is not a served file.",
         ],
-        "<output_dir>/inputs/hycom_boundary.nc",
-        "HYCOM: public domain, no key, no terms to accept.",
-        "Fetched by `fetch_hycom_boundary`, which derives its lat/lon indices from the " *
-        "coordinate arrays the server returns rather than from the nominal spacing, because " *
-        "HYCOM's latitude axis descends and getting that backwards mirrors the boundary " *
-        "silently instead of failing. UNVERIFIED END TO END: the structure is confirmed but " *
-        "the data path is refused, so this has not yet produced a file. Until it does, the " *
-        "sponge relaxes toward the [boundaries] u_inflow/v_inflow constants and the domain " *
-        "edges are effectively unconstrained. Configured by [boundaries] " *
-        "ocean_boundary_source.",
+        "<output_dir>/inputs/glorys_boundary.nc",
+        "Copernicus Marine Service - GLOBAL_MULTIYEAR_PHY_001_030."
+        ,
+        "Fetched by `fetch_copernicus_physics_subset` through `_fetcher_copernicus_physics`. " *
+        "The cache path says glorys_boundary.nc because that is what is actually fetched; the " *
+        "name hycom_boundary.nc that was here before described a product no code requests. " *
+        "Configured by [boundaries] ocean_boundary_source; the sponge is only active when " *
+        "`lateral_boundary_relaxation` is true or open boundary conditions are supplied, and " *
+        "otherwise the domain edges relax toward the configured constants."
+        ,
         tier = :modelled,
 
     ),
@@ -829,16 +836,17 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
     :bottom_temperature => DataSource(
         :bottom_temperature,
         "Bottom temperature from DFO survey observations",
-        :raw, true,
-        "GeoDataSources tier-1 raw data: the DFO bottom-temperature survey " *
-        "table carried in data/raw/",
+        :station, true,
+        "biodata/bt.rdata, converted to a GeoParquet point table carried in " *
+        "data/raw/scotian_shelf_bottom_temperature_surveys_1970_2025.parquet",
         [
             "No alternative source is needed or offered: this is the highest spatial and " *
             "temporal resolution bottom temperature available for the region, and it is " *
             "shipped with the package rather than fetched.",
             "GLORYS12V1 via Copernicus Marine provides continuous modelled bottom " *
-            "temperature where the surveys have gaps and after 2025 blending - see " *
-            ":hydrography, which supplies the model field this one supplements.",
+            "temperature where the surveys have gaps and after 2025 blending. That is the " *
+            "product the ocean model actually runs on; this one supplements it and is not " *
+            "what forces the hydrodynamic simulation.",
         ],
         "<output_dir>/inputs/bottom_temperature.zarr",
         "Canadian Department of Fisheries and Oceans survey archive; see the `project` " *
@@ -848,7 +856,12 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
         "programmes). Depth of observation `z` spans 0 to ~5000 m, so some rows are " *
         "mid-water rather than the sea floor - use `max_depth_m` to restrict them. The " *
         "gridded output carries `bottom_temperature_n`, the count of observations per " *
-        "cell, because a bin with one 2019 value is not the same claim as one with forty.",
+        "cell, because a bin with one 2019 value is not the same claim as one with forty. " *
+        "DECLARED, NOT CONSUMED BY THE HYDRODYNAMIC MODEL. Nothing in the ocean-model or " *
+        "larval paths fetches this input today -- the model's bottom temperature comes from " *
+        "GLORYS via :lateral_boundary / :hydrography. It is declared because the fetchers and " *
+        "the regional cube exist and are exercised, and because a future bottom-temperature " *
+        "forcing should not have to rediscover this table. Not required to run a model.",
         tier = :raw,
 
     ),
@@ -856,8 +869,9 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
     :substrate => DataSource(
         :substrate,
         "Interpolated substrate grain size, Scotian Shelf and Gulf of Maine",
-        :local, true,
-        "GeoDataSources tier-1 raw data: data/raw/substrate_grainsize.rdata",
+        :gridded, true,
+        "biodata/substrate_grainsize.rdata, converted to a GeoParquet point table carried " *
+        "in data/raw/scotian_shelf_substrate_grain_size.parquet",
         [
             "No alternative: the underlying raw sediment samples are not publicly " *
             "available, so this interpolated surface is the only local substrate product.",
@@ -867,7 +881,12 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
         "714063 points spanning lon -67.7..-57.1, lat 41.3..47.0, grain diameter " *
         "0.003..33.2 mm (mud to cobble). This is ALREADY INTERPOLATED surface data: the " *
         "raw grab samples behind it are not available, which is stated in the dataset's " *
-        "`interpolated` attribute so no downstream use mistakes it for measurements.",
+        "`interpolated` attribute so no downstream use mistakes it for measurements. " *
+        "DECLARED, NOT CONSUMED BY THE HYDRODYNAMIC MODEL. Nothing in the ocean-model or " *
+        "larval paths fetches this input today; the substrate surface is a habitat input for " *
+        "the regional cube. It is declared because the fetcher and the gridding are built " *
+        "and exercised, and because a future substrate-dependent biology should not have to " *
+        "rediscover this table. Not required to run a model.",
         tier = :discretized,
 
     ),
@@ -875,8 +894,9 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
     :nwa_bathymetry => DataSource(
         :nwa_bathymetry,
         "CHS 15-arc-second Northwest Atlantic bathymetric grid",
-        :local, true,
-        "GeoDataSources tier-1 raw data: data/raw/nwa.chs15sec_lon_lat_depth.xyz",
+        :gridded, true,
+        "biodata/nwa.chs15sec_lon_lat_depth.xyz, converted to a GeoParquet point table " *
+        "carried in data/raw/northwest_atlantic_chs_15arcsec_soundings.parquet",
         [
             "ETOPO_2022_v1_15s via ERDDAP - see :bathymetry - is the same nominal " *
             "resolution but a global model rather than CHS soundings. They are different " *

@@ -178,3 +178,379 @@ function regrid_bathymetry_from_etopo(; lon_range::Tuple{Real, Real} = (-71.0, -
     )
     return GeoDataset(variables = vars, coords = Dict(), dims = Dict(dims...), crs = bat, attrs = Dict{String, Any}(), backend = nothing, source = "ETOPO2022")
 end
+
+"""
+    bathymetry(; source::Symbol = :etopo, lon_range, lat_range, tier = nothing) -> GeoDataset
+
+Fetch or load bathymetry for a domain by named source.
+
+This is the dispatch point for "which bathymetry do you want" -> "how it is obtained". A
+caller asks for a source and a range; which product that resolves to, what format it is
+stored in, and whether it must be downloaded or already sits in the cache are decided here,
+not by the caller.
+
+Supported sources:
+
+- `:etopo` -- ETOPO 2022, modelled and global. The failsafe: it exists everywhere, so a run
+  that requests it cannot fail for want of data.
+- `:nwa` -- measured Northwest Atlantic shelf soundings from the biodata record. Higher
+  resolution than `:etopo` where soundings exist, and the preferred product for this shelf.
+  It sits on a **different vertical datum**, so it is not interchangeable with `:etopo` and
+  choosing it is a decision the caller configures, not something inferred here.
+
+An unknown `source` errors rather than falling back to `:etopo`. A silent fallback would
+hide a mistyped config value behind a plausible-looking bathymetry, and the run would
+proceed on a different product from the one requested without anyone learning of it.
+"""
+function bathymetry(; source::Symbol = :etopo,
+                    lon_range::Tuple{Real, Real},
+                    lat_range::Tuple{Real, Real},
+                    tier = nothing,
+                    kwargs...)
+    if source === :etopo
+        return regrid_bathymetry_from_etopo(; lon_range = lon_range, lat_range = lat_range,
+                                            kwargs...)
+    elseif source === :nwa
+        return fetch_nwa_bathymetry(; lon_range = lon_range, lat_range = lat_range,
+                                    kwargs...)
+    else
+        known = isempty(keys(BATHYMETRY_SOURCES)) ? ":etopo, :nwa" :
+                join(sort!(collect(keys(BATHYMETRY_SOURCES))), ", ")
+        error("Unknown bathymetry source $(repr(source)). Known sources: $(known).")
+    end
+end
+
+"""
+    BATHYMETRY_SOURCE_ALIASES
+
+How a bathymetry source may be spelled, mapped to the `BATHYMETRY_SOURCES` key it names.
+
+A config is written by a person, and a person writes `"etopo2022"`, `"nwa"` or
+`"scotian_shelf"` -- not the internal symbol. Every accepted spelling lands here once, so
+an error about an unknown source can quote the spellings that *are* known rather than the
+one symbol the dispatcher happens to use.
+
+`"scotian_shelf"` names a **place**, not a product, and resolves to the product that is
+better for that place: the CHS 15-arc-second soundings of the Northwest Atlantic shelf are
+survey soundings of this shelf rather than a global model of it.
+"""
+const BATHYMETRY_SOURCE_ALIASES = Dict{String, Symbol}(
+    # the global model: the failsafe, available everywhere
+    "etopo"              => :etopo,
+    "etopo2022"          => :etopo,
+    "etopo_2022"         => :etopo,
+    "global"             => :etopo,
+    # the regional products
+    "nwa"                => :nwa,
+    "nwa_bathymetry"     => :nwa,
+    "northwest_atlantic" => :nwa,
+    "chs"                => :nwa,
+    "chs15sec"           => :nwa,
+    # places, resolved to the product that suits them
+    "scotian_shelf"      => :nwa,
+    "scotian"            => :nwa,
+    "scotianshelf"       => :nwa,
+    # "you decide, from where I am working"
+    "auto"               => :auto,
+    "best"               => :auto,
+    "default"            => :auto,
+    "region"             => :auto,
+)
+
+"""
+    BATHYMETRY_COVERAGE
+
+Where each regional bathymetry source actually has soundings: `source => (lon_range,
+lat_range)` in degrees.
+
+These are the bounds the manifest's own entry declares for the source. They are what makes
+an automatic choice a statement about coverage rather than a guess: `:etopo` is a global
+model and needs no bound, while `:nwa` is a regional survey and outside this box there are
+no soundings to grid.
+"""
+const BATHYMETRY_COVERAGE = Dict{Symbol, NamedTuple}(
+    :nwa => (lon_range = (-72.0, -42.0), lat_range = (40.0, 64.0)),
+)
+
+"""
+    preferred_bathymetry_source(; source = nothing, lon_range = nothing,
+                                lat_range = nothing) -> Symbol
+
+Which bathymetry source to use, when the caller has no opinion of its own.
+
+The order of decision matters, and each step is a fact rather than a preference:
+
+1. **A named source wins.** The operator named it, and substituting a different product
+   behind their back is exactly the silent substitution this package refuses. `"etopo2022"`
+   gives ETOPO, `"scotian_shelf"` gives the NW Atlantic soundings, and an unrecognised
+   spelling is an error listing what *is* accepted.
+2. **Otherwise, coverage decides.** When the requested domain lies entirely inside a
+   regional source's soundings, that source is used: on the Scotian Shelf the CHS
+   soundings are survey measurements of the shelf being modelled, while ETOPO is a global
+   model that happens to include it.
+3. **Otherwise `:etopo`.** It is modelled and global, so it exists everywhere and a
+   request for it cannot fail for want of data.
+
+`source = nothing`, `""` or `"auto"` all mean "you decide" and take step 2. Pass
+`lon_range`/`lat_range` as `nothing` to skip the coverage test and go straight to `:etopo`.
+"""
+function preferred_bathymetry_source(; source = nothing,
+                                     lon_range = nothing,
+                                     lat_range = nothing)
+    requested = _bathymetry_source_key(source)
+    requested === :auto || return requested
+
+    # No stated preference: let coverage decide. A domain straddling the edge of a regional
+    # survey is not covered by it, because the part outside would be silently replaced by
+    # the global model and the result would be two products in one field.
+    if lon_range !== nothing && lat_range !== nothing
+        lon_lo, lon_hi = minmax(lon_range...)
+        lat_lo, lat_hi = minmax(lat_range...)
+        for key in sort!(collect(keys(BATHYMETRY_COVERAGE)); by = string)
+            cov = BATHYMETRY_COVERAGE[key]
+            inside = lon_lo >= cov.lon_range[1] && lon_hi <= cov.lon_range[2] &&
+                     lat_lo >= cov.lat_range[1] && lat_hi <= cov.lat_range[2]
+            inside && return key
+        end
+    end
+    return :etopo
+end
+
+"""
+    _bathymetry_source_key(source) -> Symbol
+
+Normalise one spelling of a bathymetry source to its `BATHYMETRY_SOURCES` key, or to the
+private `:auto` marker meaning "decide from where I am working".
+
+An unrecognised spelling errors and quotes the accepted ones. Silently mapping it to
+`:etopo` would let a typo run a whole simulation on the wrong sea floor.
+"""
+function _bathymetry_source_key(source)
+    source === nothing && return :auto
+    text = strip(lowercase(string(source)))
+    (isempty(text) || text in ("auto", "best", "default", "region")) && return :auto
+    key = get(BATHYMETRY_SOURCE_ALIASES, text, nothing)
+    if key === nothing
+        spellings = join(sort!(collect(keys(BATHYMETRY_SOURCE_ALIASES))), ", ")
+        resolved_to = join(sort!(collect(keys(BATHYMETRY_SOURCES)); by = string), ", ")
+        error("Unknown bathymetry source $(repr(source)). Accepted spellings: $(spellings). " *
+              "These resolve to $(resolved_to).")
+    end
+    return key
+end
+
+"""
+    _BATHYMETRY_MANIFEST_KEY
+
+Which declared source in `DATA_SOURCES` each `BATHYMETRY_SOURCES` key corresponds to.
+
+The two tables are keyed differently because they answer different questions: `bathymetry`
+dispatches over products, while the manifest declares provenance. Without this mapping a
+requested `tier` could not be checked against anything.
+"""
+const _BATHYMETRY_MANIFEST_KEY = Dict{Symbol, Symbol}(
+    :etopo => :bathymetry,
+    :nwa   => :nwa_bathymetry,
+)
+
+"""
+    _check_bathymetry_tier(source, tier)
+
+Refuse a `tier` that contradicts the tier `source` is declared at in the manifest.
+
+A tier is where in the raw / discretized / modelled chain the data sit, and it is a property
+of the source rather than of the request. A config asking for the NW Atlantic soundings at
+`:raw` and the manifest declaring them `:discretized` are two statements about what a product
+*is*, and proceeding would produce a field whose provenance nobody can state. A source with
+nothing declared constrains nothing, so it passes.
+"""
+function _check_bathymetry_tier(source::Symbol, tier)
+    tier === nothing && return nothing
+    manifest_key = get(_BATHYMETRY_MANIFEST_KEY, source, nothing)
+    manifest_key === nothing && return nothing
+    declared = get(GeoDataManifest.DATA_SOURCES, manifest_key, nothing)
+    declared === nothing && return nothing
+    requested = Symbol(tier)
+    requested == declared.tier || error(
+        "Bathymetry source $(source) is declared at tier :$(declared.tier), but tier " *
+        ":$(requested) was requested. Correct the tier, or correct the manifest -- the two " *
+        "are statements about what this product is, and they must agree.")
+    return nothing
+end
+
+"""
+    bathymetry_dataset(; source = nothing, lon_range, lat_range, tier = nothing,
+                       output_path = nothing, force = false,
+                       verbose = true) -> GeoDataset
+
+Bathymetry for a domain as a `GeoDataset`, by named source and range, with an optional
+durable artefact.
+
+This is the run-path counterpart to `bathymetry`: the single place that answers "which
+product, at which tier, obtained how", so a caller names a source and a range and learns
+nothing about formats or files. The difference is `output_path`, which makes the resolution
+durable and shared:
+
+- when given and already cached, that artefact is loaded and no product is re-fetched, so
+  every reader in a run sees the *same* sea floor;
+- when given and absent, the resolved product is fetched and saved there;
+- when absent, the product is returned in memory only.
+
+`source` is passed through `preferred_bathymetry_source`, so `nothing`/`"auto"` choose by
+coverage and `"scotian_shelf"` names the shelf. `tier` selects the processing level the
+source is obtained at, and `force` re-fetches past a cache.
+
+`verbose` is a print switch only: it never decides what is fetched.
+
+# Example
+```julia
+ds = bathymetry_dataset(; source = "scotian_shelf", lon_range = (-68.0, -57.0),
+                        lat_range = (42.0, 47.5),
+                        output_path = "inputs/bathymetry_active.nc")
+```
+"""
+function bathymetry_dataset(; source = nothing,
+                            lon_range::Tuple{Real, Real},
+                            lat_range::Tuple{Real, Real},
+                            tier = nothing,
+                            output_path::Union{Nothing, AbstractString} = nothing,
+                            force::Bool = false,
+                            verbose::Bool = true,
+                            kwargs...)
+    resolved = preferred_bathymetry_source(; source = source, lon_range = lon_range,
+                                           lat_range = lat_range)
+    _check_bathymetry_tier(resolved, tier)
+
+    # One artefact per (source, range, output_path). The cache is keyed by path, so a run
+    # that changed its source must not read the previous product's file back as if it were
+    # this one's: `force` is the escape, and a stale source is reported rather than used.
+    if output_path !== nothing && !force && is_cached(output_path)
+        verbose && println("Using existing bathymetry store: $(output_path) " *
+                           "(source $(resolved))")
+        return geoload(output_path)
+    end
+
+    # The fetchers all require a real path, because they all download to a file before they
+    # can read it. `output_path = nothing` asks for no durable artefact, so it is resolved to
+    # a scratch destination here rather than passed down as `nothing` -- which every one of
+    # them rejects with a TypeError, so the documented "nothing" path could never have run.
+    destination = something(output_path, joinpath("inputs", "bathymetry.zarr"))
+
+    ds = if resolved === :etopo
+        fetch_erddap_bathymetry(; lon_range = lon_range, lat_range = lat_range,
+                                output_path = destination, force = force,
+                                verbose = verbose, kwargs...)
+    elseif resolved === :nwa
+        fetch_nwa_bathymetry(; lon_range = lon_range, lat_range = lat_range,
+                             output_path = destination, verbose = verbose,
+                             force = force, kwargs...)
+    else
+        declared = join(sort!(collect(keys(BATHYMETRY_SOURCES)); by = string), ", ")
+        error("No fetcher is registered for bathymetry source $(resolved). " *
+              "Declared sources: $(declared).")
+    end
+
+    if output_path !== nothing && !is_cached(output_path)
+        error("Bathymetry source $(resolved) was resolved for " *
+              "($(lon_range), $(lat_range)) but nothing was written to $(output_path). " *
+              "The run cannot report a sea floor it does not have.")
+    end
+    return ds
+end
+
+"""
+    bathymetry_field(; source::Symbol = :etopo, lon_range, lat_range, tier = nothing,
+                     varname::AbstractString = "elevation", kwargs...) -> NamedTuple
+
+Bathymetry for a domain as plain arrays, by named source: `(elevation, lon, lat)`.
+
+Same dispatch over sources as `bathymetry`, and the same rule that a caller names a source,
+a range and a tier while which product that resolves to, what format it is stored in, and
+whether it is fetched or already cached are decided here. The difference is only the return
+shape: this returns the `(n_lon, n_lat)`-ordered arrays a numerical model consumes, rather
+than the `GeoDataset` an analysis layer would.
+
+`varname` is a preference rather than a guarantee -- `bathymetry_arrays` probes it first,
+then the accepted spellings, and errors listing what the dataset declares when it has none
+of them. No variable name is invented.
+
+`output_path`, when given, makes the resolution durable and shared through
+`bathymetry_dataset`, so every reader of a run sees the same sea floor.
+
+# Example
+```julia
+bathy = bathymetry_field(; source = "scotian_shelf", lon_range = (-68.0, -57.0),
+                         lat_range = (42.0, 47.5),
+                         output_path = "inputs/bathymetry_active.nc")
+bathy.elevation isa Matrix{Float64}
+```
+"""
+function bathymetry_field(; source = nothing,
+                          lon_range::Tuple{Real, Real},
+                          lat_range::Tuple{Real, Real},
+                          tier = nothing,
+                          varname::AbstractString = "elevation",
+                          output_path::Union{Nothing, AbstractString} = nothing,
+                          force::Bool = false,
+                          verbose::Bool = true,
+                          kwargs...)
+    ds = bathymetry_dataset(; source = source, lon_range = lon_range,
+                            lat_range = lat_range, tier = tier,
+                            output_path = output_path, force = force,
+                            verbose = verbose, kwargs...)
+    return bathymetry_arrays(ds; varname = varname)
+end
+
+"""
+    bathymetry_arrays(ds::GeoDataset; varname::AbstractString = "elevation") -> NamedTuple
+
+Read `(elevation, lon, lat)` from an already-loaded bathymetry `GeoDataset`, guaranteeing
+`(n_lon, n_lat)` ordering and `Float64` throughout.
+
+This is the format-level part of reading bathymetry, and the reason it lives here rather
+than in each caller: it is the one place that knows how a provider may spell the elevation
+variable and how the field may be transposed.
+
+Variable selection never invents a name. `varname` is used when the dataset declares it, and
+otherwise the accepted spellings are probed in order and the first one the dataset actually
+declares wins. When the dataset declares none of them this errors and lists what it does
+declare, because a misspelled variable and an absent one are different facts and both are
+reported rather than guessed at.
+
+Orientation is resolved from the dimensions the source declared, through
+`GeoData.dim_permutation`, not from `size`: on a square grid both spellings of a pair have
+the same shape, so transposing from shape is how a silently mis-read stays invisible.
+
+A 1-D field is reshaped to a single column rather than refused, since a one-station
+transect is a legitimate bathymetry record.
+"""
+function bathymetry_arrays(ds::GeoDataset; varname::AbstractString = "elevation")
+    probes = unique([varname, "elevation", "altitude", "z", "topo"])
+    key = findfirst(p -> p in keys(ds.variables), probes)
+    key === nothing && error(
+        "No bathymetry variable in this dataset. Tried $(probes); it declares " *
+        "$(sort!(collect(keys(ds.variables)))).")
+    selected = ds.variables[probes[key]]
+    permutation = GeoData.dim_permutation(selected.dims, :lon, :lat)
+    lon, _ = GeoData.axis(ds, :lon)
+    lat, _ = GeoData.axis(ds, :lat)
+    raw = Array{Float64}(selected.data)
+    elevation = ndims(raw) == 1 ? reshape(raw, :, 1) : permutedims(raw, permutation)
+    length(lon) == size(elevation, 1) && length(lat) == size(elevation, 2) || error(
+        "Variable $(repr(probes[key])) is $(size(elevation)) but the :lon axis has " *
+        "$(length(lon)) values and the :lat axis has $(length(lat)). A field and the " *
+        "axes it is gridded on must agree.")
+    return (elevation = elevation, lon = lon, lat = lat)
+end
+
+"""
+    BATHYMETRY_SOURCES
+
+The bathymetry sources `bathymetry` can dispatch to, as `source => human description`. This
+is what `available_data` reports and what an unknown-source error quotes, so adding a source
+here is the only step needed to make it requestable.
+"""
+const BATHYMETRY_SOURCES = Dict{Symbol, String}(
+    :etopo => "ETOPO 2022, modelled global relief (failsafe, exists everywhere)",
+    :nwa   => "measured Northwest Atlantic shelf soundings (higher resolution, different vertical datum)",
+)

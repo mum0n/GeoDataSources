@@ -52,6 +52,11 @@ include("Fetch/Download.jl")
 include("coastline.jl")
 include("bathymetry.jl")
 include("biodata.jl")
+
+# The coastline rings that ship with the package. Bundled data, not acquisition, and here rather
+# than in GeoData because GeoData is the generic data layer and must not carry this project's
+# study region. Applied as a default by the application layers, never by the data layer.
+include("bundled_coastline.jl")
 include("winds.jl")
 include("woa23.jl")
 include("boundary.jl")
@@ -76,7 +81,7 @@ using .LakehouseModule
 export
     # coordinate access (shared)
     axis,
-    require_coord,
+    require_coord,
     to_positive_down,
     # downloading (shared)
     download_to_path,
@@ -84,13 +89,24 @@ export
     parse_time_units,
     # coastline
     fetch_natural_earth_coastline,
+    # the bundled regional coastline rings. Exported so a caller that wants a regional
+    # default passes it explicitly, rather than the generic layer defaulting to it.
+    SCOTIAN_SHELF_COASTLINE,
     load_coastline_geodata,
     # bathymetry
     fetch_erddap_bathymetry,
     load_bathymetry_geodata,
     save_bathymetry_geodata,
-    regrid_bathymetry_from_etopo,
-    etopo_bathymetry_field,
+regrid_bathymetry_from_etopo,
+etopo_bathymetry_field,
+bathymetry,
+    bathymetry_dataset,
+    bathymetry_field,
+    bathymetry_arrays,
+    preferred_bathymetry_source,
+    BATHYMETRY_SOURCES,
+    BATHYMETRY_SOURCE_ALIASES,
+    BATHYMETRY_COVERAGE,
     # winds
     fetch_open_meteo_winds,
     load_wind_stress_geodata,
