@@ -4,7 +4,8 @@
 The three surveyed, locally held benthic sources: bottom temperature, substrate grain
 size, and the 15-arc-second NWA sounding bathymetry.
 
-Each is **tier-1 raw data** held inside this package under `data/raw/`, so a run is
+Each is **tier-1 raw data** in the central GeoData lakehouse (`store_root()/raw`, originally
+`data/raw/` while the workflow was being built), so a run is
 reproducible without an account, a token, or a network. The readers take their target grid
 from the caller rather than from the file, because these are irregularly distributed point
 data that must be binned, and because a reader that silently chooses its own resolution
@@ -33,8 +34,11 @@ using GeoParquet
 using SHA: sha256
 using DataFrames, Statistics
 
-# Every raw artefact in this package, with the cache path the manifest declares for it.
-const RAW_DATA_DIR = normpath(joinpath(@__DIR__, "..", "data", "raw"))
+# Every raw artefact, in the central GeoData lakehouse — `store_root()/raw`, i.e.
+# `projects/lakehouse/GeoData/raw` — so the medallion tiers live in the same shared registry
+# as the fetched products (see storage.jl). The package `data/` directory was the temporary
+# home before the workflow was complete.
+const RAW_DATA_DIR = joinpath(store_root(), "raw")
 
 """
     BIODATA_RAW
@@ -348,10 +352,10 @@ Four tiers, and the boundaries between them are what make each one checkable:
 
 | # | Tier | Location | Contents |
 |:---|:---|:---|:---|
-| 1 | **raw** | `data/raw/` | the source files, byte-for-byte; never opened by a writer |
-| 2 | **ingested** | `data/ingested/` | the observations as points, filtered by bounds only |
-| 3 | **gridded** | `<run>/inputs/*.zarr` | one source binned onto a caller's grid, with per-cell observation counts |
-| 4 | **cube** | `<run>/data/cubes/*.zarr` | several gridded sources assembled into one store, harmonised layouts, provenance |
+| 1 | **raw** | `lakehouse/GeoData/raw/` | the source files, byte-for-byte; never opened by a writer |
+| 2 | **ingested** | `lakehouse/GeoData/ingested/` | the observations as points, filtered by bounds only |
+| 3 | **gridded** | `lakehouse/GeoData/<source>/*.zarr` | one source binned onto a caller's grid, with per-cell observation counts |
+| 4 | **cube** | `lakehouse/GeoData/cubes/*.zarr` | several gridded sources assembled into one store, harmonised layouts, provenance |
 
 Tier 3 is per-source: `fetch_bottom_temperature` binning bottom temperature, and nothing
 else, is the whole of it. Tier 4 is the assembled product: `assimilate_regional_cube`
@@ -364,7 +368,7 @@ data existed was inside a fetcher's stack frame, so a gridding choice could not 
 without re-reading and re-filtering the raw file, and no one could see which observations a
 mean came from.
 """
-const INGESTED_DATA_DIR = normpath(joinpath(@__DIR__, "..", "data", "ingested"))
+const INGESTED_DATA_DIR = joinpath(store_root(), "ingested")
 
 """
     ingested_path(key::Symbol, tag::AbstractString = "") -> String
@@ -509,7 +513,7 @@ const DISCRETIZATION = Dict{Symbol, NamedTuple}(
 Where tier-2 outputs go: one GeoParquet per (dataset, variable, method), plus a
 JSON sidecar recording what was done.
 """
-const DISCRETIZED_DATA_DIR = normpath(joinpath(@__DIR__, "..", "data", "discretized"))
+const DISCRETIZED_DATA_DIR = joinpath(store_root(), "discretized")
 
 """
     write_grid_table(path::AbstractString, lon, lat, field, counts) -> String
@@ -1047,7 +1051,12 @@ function fetch_nwa_bathymetry(;
 
     ds = benthic_dataset(
         :nwa_bathymetry,
-        [BenthicField(:nwa_bathymetry, field, depth_cnt, :lon_lat,
+        # The field is named for the physical variable, `:elevation`, not for the source
+        # key: `bathymetry_arrays` probes `elevation`/`altitude`/`z`/`topo`, so a variable
+        # named `nwa_bathymetry` was unreadable by every consumer of `bathymetry_field`,
+        # including this package's own documented `source = "scotian_shelf"` example. The
+        # source key stays for provenance, in `benthic_dataset`'s first argument and attrs.
+        [BenthicField(:elevation, field, depth_cnt, :lon_lat,
                       elevation ? "m (elevation, positive up)" : "m (depth, positive down)")],
         lon, lat,
         notes = "Observations: $(table) (tier: ingested, bounds-filtered soundings). " *

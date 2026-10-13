@@ -193,7 +193,7 @@ and return the path to the cached artefact.
 This is the single dispatch point for "what data do we need" -> "how do we get it",
 tier by tier:
 
-- **`:raw`** - the measured data as delivered, in optimal storage (`data/raw/`).
+- **`:raw`** - the measured data as delivered, in optimal storage (`lakehouse/GeoData/raw/`).
 - **`:discretized`** - filtered, quality-controlled, and binned onto a resolution chosen
   per dataset. This is where observation noise becomes a grid, and the resolution is a
   property of the data, not of the request.
@@ -230,7 +230,11 @@ function fetch_input(key::Symbol, output_dir::AbstractString; tier = nothing,
               "Run `describe_data_sources()` for the full registry.")
     end
 
-    target = replace(replace(d.cache, "<output_dir>" => output_dir), "<mm>" => "00")
+    # `<store>` is the central, user-configurable registry (store_root()); `<output_dir>`
+    # survives only for a template that still names it. Substituting `<store>` is what puts
+    # every assimilated source under projects/lakehouse/GeoData/<source>, shared across runs.
+    target = replace(replace(replace(d.cache, "<output_dir>" => output_dir),
+                              "<store>" => store_root()), "<mm>" => "00")
     if !force && is_cached(target) && _tier_matches_cache(target, d)
         return target
     end
@@ -243,7 +247,10 @@ function fetch_input(key::Symbol, output_dir::AbstractString; tier = nothing,
     # `(path; output_dir, force, strict, kwargs...)` shape so this dispatch is uniform.
     fetcher = tier === :modelled ? get(MODELLERS, key, nothing) : get(FETCHERS, key, nothing)
     fetcher === nothing && return _fetch_input_by_url(d, target)
-    return fetcher(target; output_dir = output_dir, force = force, strict = strict,
+    # Every fetcher writes into the central store. Most take `output_path` (the resolved
+    # `target`); `fetch_woa23` takes `output_dir` and names the file itself, so it is handed
+    # `store_root()` rather than the caller's per-run directory.
+    return fetcher(target; output_dir = store_root(), force = force, strict = strict,
                    kwargs...)
 end
 
@@ -541,7 +548,8 @@ function data_provenance(
 
     for key in sort!(collect(keys(sources)); by = string)
         d = sources[key]
-        rel = replace(d.cache, "<output_dir>" => output_dir)
+        rel = replace(replace(replace(d.cache, "<store>" => store_root()),
+                              "<output_dir>" => output_dir), "<mm>" => "00")
         present = isdir(rel) || isfile(rel)
         size_bytes = 0
         if isfile(rel)
@@ -633,7 +641,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "GEBCO via NCEI: https://www.ncei.noaa.gov/products/global-relief-model (keyless, coarser)",
             "No fallback is applied. An unavailable dataset aborts the run; see :bathymetry notes.",
         ],
-        "<output_dir>/inputs/bathymetry.zarr",
+        "<store>/etopo2022.bathymetry",
         "Public domain (NOAA)",
         "Configured by [data] bathy_source. The dataset id 'etopo2022' resolves to " *
         "ETOPO_2022_v1_15s.nc. Set it to 'synthetic' to generate an analytical shelf " *
@@ -653,7 +661,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "Provides temperature, salinity, u, v, sea surface height, MLD",
             "1/12° horizontal, 50 vertical levels, 3-hourly to daily output",
         ],
-        "<output_dir>/inputs/glorys.zarr",
+        "<store>/glorys",
         "Copernicus Marine Service - GLOBAL_MULTIYEAR_PHY_001_030",
         "Requires ~/.copernicusmarine/credentials; free registration at marine.copernicus.eu",
         tier = :modelled,
@@ -680,7 +688,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "ParticleTracking already makes this call: GLORYS for `ocean_boundary_source` " *
             "because it carries currents, WOA23 for the initial condition.",
         ],
-        "<output_dir>/inputs/woa23_temperature_<mm>_0.25deg.zarr",
+        "<store>/woa23_temperature_<mm>_0.25deg",
         "Public domain (NOAA)",
         "Configured by [data] hydrography_source. The 1.00 degree monthly files are used and " *
         "regridded onto the model grid; the 0.25 degree product is a large download for the " *
@@ -701,7 +709,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "WOA23 at its native 0.25 degree grid is available from the same directory when " *
             "the 1 degree climatology is too coarse for the domain.",
         ],
-        "<output_dir>/inputs/woa23_oxygen_<mm>_0.25deg.zarr",
+        "<store>/woa23_oxygen_<mm>_0.25deg",
         "Public domain (NOAA).",
         "Fetched by `fetch_woa23_hydrography(..., include_o2 = true)`, the same reader as " *
         "temperature and salinity, since it is the same NOAA NCEI collection and depth " *
@@ -723,9 +731,9 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
         [
             "ERA5 from the Copernicus Climate Data Store: https://cds.climate.copernicus.eu (keyless for the public ERA5 subset).",
             "Global Wind Atlas: https://globalwindatlas.info (keyless, climatological only).",
-            "The SAME physical product `:atmosphere` carries. That entry describes the whole surface state -- stress plus air temperature, pressure, humidity, cloud and shortwave -- while this one names the winds alone, because that is what `[data] wind_source` and `[atmosphere] forcing` select and what `inputs/surface_winds.zarr` holds. Two keys, one dataset: the registry is keyed by what a run can ask for, not by how many files exist.",
+            "The SAME physical product `:atmosphere` carries. That entry describes the whole surface state -- stress plus air temperature, pressure, humidity, cloud and shortwave -- while this one names the winds alone, because that is what `[data] wind_source` and `[atmosphere] forcing` select and what `lakehouse/GeoData/era5.zarr` holds. Two keys, one dataset: the registry is keyed by what a run can ask for, not by how many files exist.",
         ],
-        "<output_dir>/inputs/surface_winds.zarr",
+        "<store>/era5",
         "Public domain (Copernicus ERA5 / Open-Meteo).",
         "Fetched by `fetch_open_meteo_winds` with the ERA5 surface state ingested alongside the " *
         "stress on the same hourly time axis, so stress and heat flux vary in time together. " *
@@ -747,7 +755,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "ERA5 from the Copernicus Climate Data Store: https://cds.climate.copernicus.eu (KEYLESS for the public ERA5 subset)",
             "Global Wind Atlas: https://globalwindatlas.info (keyless, climatological only)",
         ],
-        "<output_dir>/inputs/surface_winds.zarr",
+        "<store>/era5",
         "See :surface_winds",
         "The fetcher ingests the ERA5 surface state alongside the winds -- air temperature, " *
         "surface pressure, relative humidity, cloud fraction and incoming shortwave -- on the " *
@@ -774,7 +782,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "Scope limit, verified from the fetcher's own command: it requests only `--variable thetao --variable so`. It does NOT request u/v. So this input constrains temperature and salinity at the sponge, not the normal velocity, and the earlier note's claim that it 'carries velocities, which is what a sponge actually needs' does not hold for the subset actually taken. The open edge is still only as open as the relaxation constants in [boundaries] u_inflow/v_inflow.",
             "NCAR GDEX holds a keyless record for GLORYS12V1 (d010049, DOI 10.5065/3NSD-QP06) with 'Access Constraints: None', but its dataset catalog is empty -- no files -- so it does not serve data. A metadata record is not a served file.",
         ],
-        "<output_dir>/inputs/glorys_boundary.nc",
+        "<store>/glorys_boundary.nc",
         "Copernicus Marine Service - GLOBAL_MULTIYEAR_PHY_001_030."
         ,
         "Fetched by `fetch_copernicus_physics_subset` through `_fetcher_copernicus_physics`. " *
@@ -798,7 +806,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "The archive is a whole-world file of ~4100 LineString features (about 10 MB). `fetch_natural_earth_coastline` clips it to the run's domain plus a margin before writing, so a regional run stores only the segments it needs.",
             "Coarser 50 m and 110 m series are available via `[data] coastline_source` when only a regional outline is wanted.",
         ],
-        "<output_dir>/inputs/coastline.parquet",
+        "<store>/coastline.parquet",
         "Public domain (Natural Earth).",
         "Written as lon,lat vertex lists grouped under `> name,code` headers, the format " *
         "`load_coastline_polygons` reads. This replaces the hand-drawn regional outline that " *
@@ -817,7 +825,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "TPXO9-Atlas from the publisher, https://www.tpxo.atlas.oregonstate.edu (free and open, but the host does not resolve from every network, including this one).",
             "FES2014 / FES2022 from AVISO, https://www.aviso.altimetry.fr (AVISO requires a free account).",
         ],
-        "<output_dir>/inputs/tpxo9/u_tpxo9.v1.nc",
+        "<store>/tpxo9/u_tpxo9.v1.nc",
         "TPXO9-Atlas: CC-BY-4.0.",
           "u_tpxo9.v1.nc carries the VELOCITY harmonics on the staggered u/v grids, in " *
           "BOTH of the two forms TPXO9-Atlas ships: amplitude/phase " *
@@ -838,7 +846,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
         "Bottom temperature from DFO survey observations",
         :station, true,
         "biodata/bt.rdata, converted to a GeoParquet point table carried in " *
-        "data/raw/scotian_shelf_bottom_temperature_surveys_1970_2025.parquet",
+        "lakehouse/GeoData/raw/scotian_shelf_bottom_temperature_surveys_1970_2025.parquet",
         [
             "No alternative source is needed or offered: this is the highest spatial and " *
             "temporal resolution bottom temperature available for the region, and it is " *
@@ -848,7 +856,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "product the ocean model actually runs on; this one supplements it and is not " *
             "what forces the hydrodynamic simulation.",
         ],
-        "<output_dir>/inputs/bottom_temperature.zarr",
+        "<store>/bottom_temperature",
         "Canadian Department of Fisheries and Oceans survey archive; see the `project` " *
         "column of the raw table for the 30 contributing programmes.",
         "442177 observations from 1970 to 2025 across 30 survey programmes (Groundfish, " *
@@ -871,12 +879,12 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
         "Interpolated substrate grain size, Scotian Shelf and Gulf of Maine",
         :gridded, true,
         "biodata/substrate_grainsize.rdata, converted to a GeoParquet point table carried " *
-        "in data/raw/scotian_shelf_substrate_grain_size.parquet",
+        "in lakehouse/GeoData/raw/scotian_shelf_substrate_grain_size.parquet",
         [
             "No alternative: the underlying raw sediment samples are not publicly " *
             "available, so this interpolated surface is the only local substrate product.",
         ],
-        "<output_dir>/inputs/substrate.zarr",
+        "<store>/substrate",
         "Canadian Hydrographic Service / DFO sediment compilation.",
         "714063 points spanning lon -67.7..-57.1, lat 41.3..47.0, grain diameter " *
         "0.003..33.2 mm (mud to cobble). This is ALREADY INTERPOLATED surface data: the " *
@@ -896,14 +904,14 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
         "CHS 15-arc-second Northwest Atlantic bathymetric grid",
         :gridded, true,
         "biodata/nwa.chs15sec_lon_lat_depth.xyz, converted to a GeoParquet point table " *
-        "carried in data/raw/northwest_atlantic_chs_15arcsec_soundings.parquet",
+        "carried in lakehouse/GeoData/raw/northwest_atlantic_chs_15arcsec_soundings.parquet",
         [
             "ETOPO_2022_v1_15s via ERDDAP - see :bathymetry - is the same nominal " *
             "resolution but a global model rather than CHS soundings. They are different " *
             "products and are NOT interchangeable: they differ on the shelf by metres to " *
             "tens of metres, and neither is wrong. Choose one per run.",
         ],
-        "<output_dir>/inputs/nwa_bathymetry.zarr",
+        "<store>/nwa_bathymetry",
         "Canadian Hydrographic Service, Northwest Atlantic soundings.",
         "28142338 XYZ rows spanning lon -72..-42 and lat 40..64, on a REGULAR 15 arc-second " *
         "lattice of 7201 x 5761 nodes with land cells omitted (41.5M lattice cells, 28.1M " *

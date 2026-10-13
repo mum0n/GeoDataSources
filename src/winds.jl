@@ -43,7 +43,11 @@ function fetch_open_meteo_winds(;
     lat_range::Tuple{Real, Real},
     time_iso::AbstractString = "2023-06-01T00:00:00Z",
     output_path::AbstractString = joinpath("inputs", "wind.zarr"),
-    backend::Symbol = :zarr,
+    # Backend follows the path's extension, not a fixed `:zarr`. A caller that names a `.nc`
+    # destination gets NetCDF; `nothing` lets `geosave`/`geoload` infer it. Defaulting to
+    # `:zarr` regardless wrote a Zarr store to a `.nc` path, which a later NetCDF read then
+    # opened as a directory and failed with "Permission denied".
+    backend = nothing,
     force::Bool = false,
     verbose::Bool = true
 )

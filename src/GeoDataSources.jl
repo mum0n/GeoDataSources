@@ -47,6 +47,9 @@ using Base64, CodecZlib, DataFrames, Dates, Downloads, GeoInterface, GeoParquet,
 # Local helpers: one downloader, one coordinate accessor. Everything else below uses them.
 include("Access/Axis.jl")
 include("Fetch/Download.jl")
+# Assimilated-data storage: the central, user-configurable registry. Included before the
+# sources because they (bathymetry, the manifest) resolve their cache through store_root().
+include("storage.jl")
 
 # Data sources
 include("coastline.jl")
@@ -87,6 +90,11 @@ export
     download_to_path,
     cache_path,
     parse_time_units,
+    # assimilated-data storage (central, user-configurable registry)
+    storage_config,
+    store_root,
+    store_path,
+    storage_file_path,
     # coastline
     fetch_natural_earth_coastline,
     # the bundled regional coastline rings. Exported so a caller that wants a regional

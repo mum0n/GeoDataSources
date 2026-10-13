@@ -243,10 +243,22 @@ GeoDataSources/
   configs/regions/*.toml   cube configurations
   scripts/fetch_inputs.jl  fetch and register declared inputs
   scripts/assimilate_cube.jl  build a cube from a config
+  default_storage.toml     central assimilation store root (user-editable)
+  storage.jl (in src/)     store_root()/store_path() loader
 ```
 
 Test coverage: 199 assertions.
 
+## Central assimilated-data store
+
+Every product this package fetches or assimilates lands in **one** central, shared registry
+— `GeoDataSources/default_storage.toml` sets its `store_root` (default
+`../lakehouse/GeoData`, i.e. `projects/lakehouse/GeoData/<source>`), read at call time so
+editing that one file relocates the whole registry without a recompile. Each `DATA_SOURCES`
+entry declares its cache as `<store>/<source>…`, and `fetch_input` substitutes `<store>` from
+`store_root()` — **store first, then download**. Full design, per-source layout, and the
+check in [`STORAGE.md`](./STORAGE.md).
+
 ## Related
 
-- [`GeoData.md`](../GeoData/GeoData.md) — types, backends, coordinate operations, analysis. 
+- [`GeoData.md`](../GeoData/README.md) — types, backends, coordinate operations, analysis. 

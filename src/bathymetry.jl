@@ -73,8 +73,14 @@ function fetch_erddap_bathymetry(;
     # ERDDAP an inverted one returns an empty subset that loads without complaint.
     min_lon, max_lon = minmax(lon_range...)
     min_lat, max_lat = minmax(lat_range...)
+    # Coordinate-value bounds are parenthesised at BOTH ends: the earlier code parenthesised
+    # only the start -- `z[(45.0):1:46.9]` -- which ERDDAP answers with a 400. The dataset's
+    # own `defaultGraphQuery` is `z[(start):(stop)][(start):(stop)]`, so mirror that, and
+    # emit an explicit stride only when one is asked for.
+    lat_rng = stride <= 1 ? "($(min_lat)):($(max_lat))" : "($(min_lat)):$(stride):($(max_lat))"
+    lon_rng = stride <= 1 ? "($(min_lon)):($(max_lon))" : "($(min_lon)):$(stride):($(max_lon))"
     url = "https://coastwatch.pfeg.noaa.gov/erddap/griddap/$(dataset_id).nc?" *
-          "$(var)%5B($(min_lat)):$(stride):$(max_lat)%5D%5B($(min_lon)):$(stride):$(max_lon)%5D"
+          "$(var)%5B$(lat_rng)%5D%5B$(lon_rng)%5D"
 
     verbose && println("Fetching bathymetry from ERDDAP...")
     # Scratch beside the destination on purpose: a large ERDDAP file must not land in the OS temp dir.
@@ -177,6 +183,104 @@ function regrid_bathymetry_from_etopo(; lon_range::Tuple{Real, Real} = (-71.0, -
         "elevation" => GeoArray(elev, dims, bat, Dict{String, Any}("units" => "m")),
     )
     return GeoDataset(variables = vars, coords = Dict(), dims = Dict(dims...), crs = bat, attrs = Dict{String, Any}(), backend = nothing, source = "ETOPO2022")
+end
+
+"""
+    _etopo_from_store_tile(; lon_range, lat_range, verbose) -> GeoDataset
+
+ETOPO read from the GeoData store — NumericalEarth's cached 15/60-arc-second relief tiles —
+subset to the domain and turned into a `(lon, lat)` `elevation` dataset. Reading the store's
+tile avoids re-downloading the whole relief model each run; the tile that spans the domain is
+chosen by parsing the hemisphere/quadrant from its filename. `lons`/`lats` come straight from
+the tile, `z` is the hyperslab over the domain.
+
+This supersedes both the ERDDAP URL fetch (whole-planet download each run) and the
+`NumericalEarth.regrid_bathymetry` shortcut, which built a grid with symbols NumericalEarth
+does not export.
+"""
+function _etopo_from_store_tile(; lon_range::Tuple{Real, Real},
+                                lat_range::Tuple{Real, Real},
+                                verbose::Bool = true)
+    min_lon, max_lon = minmax(lon_range...)
+    min_lat, max_lat = minmax(lat_range...)
+
+    # Search the central GeoData store first (store_root()/etopo), then NumericalEarth's
+    # scratch space and any per-run inputs/ETOPO. The central store wins so an operator who
+    # has relocated the registry has it honoured.
+    candidate_dirs = AbstractString[store_path("etopo")]
+    for base in (joinpath(homedir(), ".julia", "scratchspaces"),
+                 joinpath(@__DIR__, "..", "..", "inputs"))
+        isdir(base) && for proj in readdir(base; join = true)
+            push!(candidate_dirs, joinpath(proj, "ETOPO"))
+        end
+    end
+    tiles = String[]
+    for base in candidate_dirs
+        isdir(base) && for f in readdir(base; join = true)
+            occursin("ETOPO", f) && endswith(f, ".nc") && push!(tiles, f)
+        end
+    end
+
+    # A tile's name carries its coverage: N/S (latitude half) and E/W (longitude quadrant),
+    # e.g. `ETOPO_2022_v1_60s_N90W180_surface.nc` is lat 0..90, lon -180..0.
+    function tile_coverage(fname::AbstractString)
+        m = match(r"_([NS])(\d+)([EW])(\d+)_surface\.nc$", fname)
+        m === nothing && return nothing
+        ns, nd, ew, ed = m[1], parse(Int, m[2]), m[3], parse(Int, m[4])
+        lat = ns == "N" ? (0.0, Float64(nd)) : (-Float64(nd), 0.0)
+        lon = ew == "W" ? (-Float64(ed), 0.0) : (0.0, Float64(ed))
+        return (lat = lat, lon = lon)
+    end
+
+    tile = nothing
+    for f in tiles
+        c = tile_coverage(basename(f))
+        c === nothing && continue
+        if c.lat[1] <= min_lat && max_lat <= c.lat[2] && c.lon[1] <= min_lon && max_lon <= c.lon[2]
+            tile = f
+            break
+        end
+    end
+    # The tiles carry GLOBAL coordinate arrays even when the filename names a quadrant, so
+    # if no filename declares coverage, fall back to any available tile and let the arrays'
+    # own range decide (a domain outside them yields an empty subset, which is an error).
+    if tile === nothing && !isempty(tiles)
+        tile = first(sort(tiles))
+    end
+    # Not in the store: return `nothing` so the caller can fall back to a GeoDataSources
+    # download (store first, then fetch) rather than aborting the run.
+    if tile === nothing
+        verbose && println("ETOPO: no tile in the GeoData store covers this domain.")
+        return nothing
+    end
+    verbose && println("Reading ETOPO from the store tile: $(basename(tile))")
+
+    ds = Dataset(tile)
+    lon = collect(Float64, ds["lon"][:])
+    lat = collect(Float64, ds["lat"][:])
+    li = findall(x -> min_lat <= x <= max_lat, lat)
+    lj = findall(x -> min_lon <= x <= max_lon, lon)
+    # The tile's first index is LONGITUDE: `z[lon, lat]`. Reading `z[lat, lon]` silently
+    # transposes the whole relief model (a shelf read as the deep slope). Subset in (lon, lat)
+    # order, keep it that way, and coerce the tile's `Union{Missing, Float32}` cells to a
+    # concrete `Float64` (missing -> NaN), which is what a NetCDF writer can serialise.
+    zsub = [v === missing ? NaN : Float64(v) for v in ds["z"][lj, li]]
+    close(ds)
+
+    lons = lon[lj]
+    lats = lat[li]
+    bat = CoordinateSystem(crs = "EPSG:4326")
+    d_lon = Dimension(name = :lon, size = length(lons), coords = lons, units = "degrees_east", dim_type = DIM_SPATIAL)
+    d_lat = Dimension(name = :lat, size = length(lats), coords = lats, units = "degrees_north", dim_type = DIM_SPATIAL)
+    elev = zsub   # already (lon, lat)
+    return GeoDataset(
+        variables = Dict("elevation" => GeoArray(elev, (d_lon, d_lat), bat, Dict{String, Any}("units" => "m"))),
+        coords = Dict{Symbol, GeoArray}(),
+        dims = Dict(d_lon.name => d_lon, d_lat.name => d_lat),
+        crs = bat,
+        attrs = Dict{String, Any}("source" => "ETOPO2022 (store tile: $(basename(tile)))"),
+        backend = nothing,
+        source = "ETOPO2022")
 end
 
 """
@@ -437,9 +541,18 @@ function bathymetry_dataset(; source = nothing,
     destination = something(output_path, joinpath("inputs", "bathymetry.zarr"))
 
     ds = if resolved === :etopo
-        fetch_erddap_bathymetry(; lon_range = lon_range, lat_range = lat_range,
-                                output_path = destination, force = force,
-                                verbose = verbose, kwargs...)
+        # Store first: the cached relief tile is subset to the domain. If the store has no
+        # covering tile, download via GeoDataSources' ERDDAP choice (which caches to
+        # `destination`). Either way the run's cached sea floor ends up at `destination`.
+        d = _etopo_from_store_tile(; lon_range = lon_range, lat_range = lat_range, verbose = verbose)
+        if d !== nothing
+            geosave(destination, d; backend = :ncdatasets, overwrite = true)
+            d
+        else
+            verbose && println("ETOPO: downloading via ERDDAP (store has no covering tile)...")
+            fetch_erddap_bathymetry(; lon_range = lon_range, lat_range = lat_range,
+                                    output_path = destination, force = force, verbose = verbose)
+        end
     elseif resolved === :nwa
         fetch_nwa_bathymetry(; lon_range = lon_range, lat_range = lat_range,
                              output_path = destination, verbose = verbose,

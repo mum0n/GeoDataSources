@@ -1,0 +1,28 @@
+# ==============================================================================
+#  GeoDataSources/default_storage.toml -- assimilation storage (user-editable)
+# ==============================================================================
+#
+#  Where every product GeoDataSources assimilates is kept, in ONE central, shared
+#  registry rather than in each run's private outputs/<scenario>/inputs/. A dataset is
+#  fetched once per machine and reused across scenarios, regions and halves.
+#
+#  This file is read at call time by GeoDataSources (Geomeance), so editing it and
+#  re-running takes effect without recompiling the package. Every path is resolved
+#  relative to the GeoDataSources package directory, so a relative value is stable no
+#  matter which package invokes the fetch or from what working directory.
+#
+#  [storage] store_root       the registry root; each source lands in store_root/<source>
+#  [storage] checksum.verify   whether to SHA-256 a downloaded artefact against the
+#                              manifest checksum (default true; false skips the digest)
+# ==============================================================================
+
+[storage]
+# One directory for all assimilated inputs, shared across runs and halves:
+#   <store_root>/bathymetry, <store_root>/etopo, <store_root>/woa23,
+#   <store_root>/coastline, <store_root>/surface_winds, <store_root>/tpxo9, ...
+# Since this is GeoDataSources/, "../lakehouse/GeoData" is projects/lakehouse/GeoData.
+store_root = "../lakehouse/GeoData"
+
+# Verify a downloaded artefact's SHA-256 against the manifest. Turn off to skip the
+# digest on a large download you trust.
+verify_checksum = true

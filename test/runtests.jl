@@ -80,7 +80,7 @@ include("helpers.jl")
         cfg_path = joinpath(@__DIR__, "..", "configs", "regions", "scotian_shelf.toml")
         cfg = load_cube_config(cfg_path)
         @test cfg.region_name == "scotian_shelf"
-        @test cfg.output_path == "data/cubes/scotian_shelf_environmental.zarr"
+        @test cfg.output_path == joinpath(store_root(), "cubes", "scotian_shelf_environmental.zarr")
         @test length(cfg.variables) == length(TOML.parsefile(cfg_path)["variables"])
         @test all(haskey(CUBE_VARIABLE_SOURCES, v) for v in cfg.variables)
         @test all(haskey(CUBE_VARIABLE_LAYOUT, v) for v in cfg.variables)
@@ -136,9 +136,12 @@ include("helpers.jl")
         declared = Set(keys(GeoDataManifest.DATA_SOURCES))
         @test all(k -> k in declared, keys(GeoDataManifest.FETCHERS))
         @test sort(collect(keys(GeoDataManifest.FETCHERS))) ==
-              sort([:bathymetry, :atmosphere, :hydrography, :woa23,
-                    :coastline, :lateral_boundary, :bottom_temperature, :substrate,
-                    :nwa_bathymetry, :glorys, :tides])
+              sort([:bathymetry, :atmosphere, :hydrography, :woa23, :coastline,
+                    :lateral_boundary, :bottom_temperature, :substrate,
+                    :nwa_bathymetry, :glorys, :tides,
+                    # :surface_winds names the winds alone; :atmosphere carries the whole ERA5
+                    # surface state. Same product, two keyed sources (see DATA_SOURCES notes).
+                    :surface_winds])
     end
 
     @testset "Unbuildable sources fail clearly, not silently" begin
