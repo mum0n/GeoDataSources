@@ -14,7 +14,8 @@ using Base64
 using JSON3
 using GeoData
 
-export copernicusmarine_executable,
+    export copernicusmarine_executable,
+           copernicusmarine_command,
        project_python,
        copernicus_credentials,
        copernicus_login_reminder,
@@ -157,6 +158,35 @@ function copernicus_login_reminder()::String
 end
 
 """
+    copernicusmarine_command() -> Cmd
+
+The `copernicusmarine` command, to which arguments are appended.
+
+A console script's launcher embeds the interpreter it was installed against. When the
+virtualenv moves -- which a package rename does, and this workspace has done -- the `.exe`
+still names the old `python.exe` and every call fails with "Unable to create process using
+'...ParticleTracking\\.venv\\Scripts\\python.exe' ...: The system cannot find the file
+specified". That message names neither the launcher nor the move, and it is reported by the
+fetcher as a download failure, which sends a reader looking for credentials instead.
+
+So a script sitting beside the interpreter we already resolved is not run directly: the same
+entry point is invoked through that interpreter instead, which is the interpreter the script
+would have used anyway and is correct wherever the venv now lives. A script *outside* it --
+an explicit `COPERNICUSMARINE_EXE`, or one found on PATH -- is used as-is, because that is
+an operator's deliberate choice rather than an install-time detail.
+"""
+function copernicusmarine_command()::Cmd
+    exe = copernicusmarine_executable()
+    py = project_python()
+    if normpath(dirname(exe)) != normpath(dirname(py))
+        return `$(Cmd([exe]))`
+    end
+    return Cmd([py, "-c",
+        "import sys; from copernicusmarine.command_line_interface.copernicus_marine " *
+        "import command_line_interface as _cli; sys.exit(_cli())"])
+end
+
+"""
     fetch_copernicus_physics_subset(; kwargs...) -> String
 
 Download a regional subset of 3D temperature (`thetao`) and salinity (`so`) from a
@@ -187,7 +217,7 @@ function fetch_copernicus_physics_subset(;
     min_lat, max_lat = Float64(lat_range[1]), Float64(lat_range[2])
     mkpath(dirname(output_path))
 
-    cli = copernicusmarine_executable()
+    cli = copernicusmarine_command()
 
     if verbose
         println("Requesting Copernicus Marine subset ($dataset_id)...")
@@ -224,20 +254,25 @@ function fetch_copernicus_physics_subset(;
             "."
         )
     end
-
-    cmd = `$cli subset \
-            $auth \
-            --dataset-id $dataset \
-            --variable thetao \
-            --variable so \
-            --minimum-longitude $min_lon \
-            --maximum-longitude $max_lon \
-            --minimum-latitude $min_lat \
-            --maximum-latitude $max_lat \
-            --start-datetime "$(start_date)T00:00:00" \
-            --end-datetime "$(end_date)T23:59:59" \
-            --output-filename $(basename(output_path)) \
-            --output-directory $(dirname(output_path))`
+    # The command is assembled as an explicit argv, not a multi-line backtick literal. In a
+    # command literal a backslash followed by spaces on the *same* line is an escaped space,
+    # which becomes a one-space argument: the CLI then reports `No such command ' '` and
+    # nothing is downloaded -- an error that names neither the encoding nor the argument.
+    args = String[cli.exec...]
+    push!(args, "subset")
+    append!(args, auth.exec)
+    append!(args, ["--dataset-id", dataset,
+                   "--variable", "thetao",
+                   "--variable", "so",
+                   "--minimum-longitude", string(min_lon),
+                   "--maximum-longitude", string(max_lon),
+                   "--minimum-latitude", string(min_lat),
+                   "--maximum-latitude", string(max_lat),
+                   "--start-datetime", string(start_date, "T00:00:00"),
+                   "--end-datetime", string(end_date, "T23:59:59"),
+                   "--output-filename", basename(output_path),
+                   "--output-directory", dirname(output_path)])
+    cmd = Cmd(args)
 
     try
         run(cmd)
@@ -272,7 +307,14 @@ function fetch_copernicus_hydrography_with_fallback(;
     output_path::AbstractString = joinpath("inputs", "copernicus_ts.nc"),
     verbose::Bool = true
 )
+    # Modern catalogue ids first, legacy names after. The four `GLOBAL_*` ids used to lead,
+    # and the Copernicus catalogue no longer resolves them ("Dataset not found" for every
+    # request), so the chain failed four times before reaching one that works. Verified
+    # against the live catalogue: the `cmems_mod_glo_phy_my_*` products answer, the
+    # `GLOBAL_*` names do not.
     datasets = [
+        "cmems_mod_glo_phy_my_0.083deg_P1M-m",
+        "cmems_mod_glo_phy_my_0.083deg_P1D-m",
         "GLOBAL_MULTIYEAR_PHY_001_033",
         "GLOBAL_REANALYSIS_PHY_001_031",
         "GLOBAL_MULTIYEAR_PHY_001_030",
