@@ -61,10 +61,15 @@ function project_python()::String
         isempty(strip(override)) || return normpath(override)
     end
 
+    # This file is `src/Fetch/copernicus.jl`, so `@__DIR__` is `src/Fetch` and the package
+    # root is two levels up. A third level lands in the workspace, where there is no `.venv`,
+    # and the lookup then falls back to `Sys.which("python")` — a system interpreter with no
+    # `copernicusmarine` beside it, which is what a Copernicus fetch reports as a missing
+    # console script.
     exe = Sys.iswindows() ? "python.exe" : "python"
     rel = Sys.iswindows() ? joinpath("Scripts", exe) : joinpath("bin", exe)
 
-    package_root = normpath(joinpath(@__DIR__, "..", "..", ".."))
+    package_root = normpath(joinpath(@__DIR__, "..", ".."))
     candidates = String[joinpath(package_root, ".venv", rel)]
 
     active = get(ENV, "VIRTUAL_ENV", "")

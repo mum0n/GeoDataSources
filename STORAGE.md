@@ -4,7 +4,7 @@ All products `GeoDataSources` assimilates — bathymetry (`etopo2022`, `nwa_bath
 coastline, surface winds, `woa23`, `glorys`/`copernicus` boundary physics, `tpxo9` tides,
 and the bundled tier-1 products — are kept in **one central, shared registry** rather than
 in each run's private `outputs/<scenario>/inputs/`. A dataset is fetched once per machine
-and reused across scenarios, regions and the two modelling halves.
+and reused across scenarios, regions and runs.
 
 ```
 projects/lakehouse/GeoData/
@@ -73,6 +73,8 @@ To make the central copy primary, drop a covering tile into `lakehouse/GeoData/e
 
 ## Relocating existing stores
 
-Run about as a one-liner in the store `default_storage.toml`; existing copies under
-`ParticleTracking/inputs`, `…/work/*/inputs` were deduplicated into the central store, and
-each reader now resolves the central copy first, so stale run-local copies can be deleted.
+Run `store_root` in `default_storage.toml` as a one-liner. Where a machine already holds
+run-local copies from before the central store existed, they were deduplicated into the central
+store, and each reader now resolves the central copy first — so a stale run-local copy can be
+deleted. `data_provenance(output_dir)` records which bytes a run actually read, which is what
+distinguishes a legitimate per-domain artefact from a leftover.

@@ -188,8 +188,8 @@ uuid = geopublish!(catalog, "https://example.com/obs.nc";
                    key = :noaa_obs, name = "NOAA In-Situ Observations", tier = :raw,
                    variables = ["temp"])
 
-entry = geofetch(catalog, :larval_dispersal)
-results = find_datasets(catalog; tier = :derived, producer = "ParticleTracking")
+entry = geofetch(catalog, :climate_projections)
+results = find_datasets(catalog; tier = :derived, producer = "GeoDataSources")
 ```
 
 Entries carry a UUID, a short key, a name, a tier, variables, spatial and temporal bounds,

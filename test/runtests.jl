@@ -80,7 +80,7 @@ include("helpers.jl")
         cfg_path = joinpath(@__DIR__, "..", "configs", "regions", "scotian_shelf.toml")
         cfg = load_cube_config(cfg_path)
         @test cfg.region_name == "scotian_shelf"
-        @test cfg.output_path == joinpath(store_root(), "cubes", "scotian_shelf_environmental.zarr")
+        @test cfg.output_path == joinpath(store_root(), "cubes", "scotian_shelf_environmental")
         @test length(cfg.variables) == length(TOML.parsefile(cfg_path)["variables"])
         @test all(haskey(CUBE_VARIABLE_SOURCES, v) for v in cfg.variables)
         @test all(haskey(CUBE_VARIABLE_LAYOUT, v) for v in cfg.variables)
@@ -164,6 +164,30 @@ include("helpers.jl")
         # Every fetcher names a declared source: a dangling fetcher never resolves.
         @test all(k -> k in keys(GeoDataManifest.DATA_SOURCES),
                   keys(GeoDataManifest.FETCHERS))
+    end
+
+    @testset "fetch_input resolves a cached store through <store>" begin
+        # The `<store>` substitution lives in the manifest submodule and runs *before* the
+        # cache check, so an unqualified parent-module call there fails every `fetch_input`
+        # call, cached or not. It did: `store_root` was never imported into that module, and
+        # no test reached the line because every other test stopped at a cached store or an
+        # unbuildable source. This is the offline test that reaches it.
+        dir = test_scratch()
+        try
+            target = replace(GeoDataManifest.DATA_SOURCES[:bathymetry].cache,
+                             "<store>" => store_root())
+            if is_cached(target)
+                path = fetch_input(:bathymetry, dir)
+                @test path == target
+                # The cache is the registry's copy, not a per-run download.
+                @test startswith(abspath(path), abspath(store_root()))
+            else
+                @info "Central store has no cached :bathymetry; skipping the resolved-path check."
+                @test true
+            end
+        finally
+            rm(dir; recursive = true, force = true)
+        end
     end
 
     @testset "Adapter keyword contract holds when actually called" begin
@@ -630,7 +654,34 @@ include("helpers.jl")
                 rm(dir; recursive = true, force = true)
             end
         end
+
+    @testset "Lakehouse paths resolve and checksums hash" begin
+        # Both of these failed on first use from a notebook: `lakehouse_path` called
+        # `lakehouse_root_dir`, which lives in the sibling catalogue module, so it raised
+        # UndefVarError; and `compute_lakehouse_checksum` read a `.digest` field that does not
+        # exist on a SHA2 context. Neither had a caller, so neither had a test.
+        scratch = test_scratch()
+        try
+            path = lakehouse_path(:probe; tier = :processed, ext = "zarr")
+            @test endswith(path, ".zarr")
+            @test contains(path, string(lakehouse_root_dir()))
+            # Pure: asking where something would go creates nothing.
+            @test !isdir(path)
+            @test_throws ArgumentError lakehouse_path(:probe; tier = :nope)
+
+            f = joinpath(scratch, "blob.bin")
+            write(f, rand(UInt8, 4096))
+            digest = compute_lakehouse_checksum(f)
+            @test length(digest) == 64 && occursin(r"^[0-9a-f]+$", digest)
+            @test digest == compute_lakehouse_checksum(f)      # stable for the same bytes
+            @test compute_lakehouse_checksum(joinpath(scratch, "absent.bin")) == ""
+            write(f, [0x00])
+            @test compute_lakehouse_checksum(f) != digest      # changed content, changed digest
+        finally
+            rm(scratch; recursive = true, force = true)
+        end
     end
+end
 
 @testset "WOA23 subset strings name each axis once" begin
         # The oxygen THREDDS branch built `...lat[130:1:138],depthdepth[0:1:101]...` --
@@ -840,6 +891,125 @@ include("helpers.jl")
         @test to_positive_down([10.0, 20.0]) == ([10.0, 20.0], false)
         @test is_cached(joinpath(@__DIR__, "..", "Project.toml"))
         @test !is_cached("nope.zarr")
+    end
+
+
+    @testset "A boundary subset already assimilated is reused, not re-fetched" begin
+        # The per-domain cache path in the run's `inputs/` is not where a downloaded subset
+        # lives: it sits under the source's own directory in the central store. Looking only
+        # by its per-domain name re-fetched it, and the fetch needs a Copernicus console
+        # script that is only available when the product was not already assimilated.
+        using GeoDataSources: _central_glorys_subset
+        dir = test_scratch()
+        try
+            mkpath(dir)
+            # A fixture covering a box, a fixture covering a smaller one, and one that is
+            # not a NetCDF at all -- each written by geosave so the reader sees the same
+            # structure the assimilation produces.
+            function subset(name, lon, lat)
+                lonv = collect(Float64, lon)
+                latv = collect(Float64, lat)
+                l = Dimension(name = :lon, size = length(lonv), coords = lonv,
+                              units = "degrees_east", dim_type = GeoData.DIM_SPATIAL)
+                t = Dimension(name = :lat, size = length(latv), coords = latv,
+                              units = "degrees_north", dim_type = GeoData.DIM_SPATIAL)
+                crs = CoordinateSystem(crs = "EPSG:4326")
+                vars = Dict{String, GeoArray}("thetao" => GeoArray(ones(length(lonv), length(latv)),
+                                                                   (l, t), crs, Dict()))
+                ds = GeoDataset(vars,
+                                Dict{Symbol, GeoArray}(:lon => GeoArray(lonv, (l,), crs, Dict()),
+                                                       :lat => GeoArray(latv, (t,), crs, Dict())),
+                                Dict{Symbol, Dimension}(:lon => l, :lat => t), crs,
+                                Dict{String, Any}(), nothing, "glorys-fixture")
+                geosave(joinpath(dir, name), ds; backend = :ncdatasets)
+                return joinpath(dir, name)
+            end
+
+            covering = subset("boundary_big.nc", -71.0:0.5:-53.0, 40.0:0.5:48.5)
+            covering2 = subset("boundary_wide.nc", -80.0:0.5:-45.0, 30.0:0.5:55.0)
+            subset("boundary_small.nc", -60.0:0.5:-55.0, 42.0:0.5:46.0)
+            write(joinpath(dir, "notes.txt"), "not a NetCDF")
+
+            # The exact scotian_shelf embedding box is covered by the first fixture, and the
+            # smallest covering file is not assumed: a larger file covering the same box is
+            # accepted too, which is what "covers" means.
+            box = ((-71.0, -53.0), (40.0, 48.5))
+            found = _central_glorys_subset(box...; dir = dir)
+            @test found in (covering, covering2)
+            @test endswith(string(found), ".nc")
+
+            # A box the fixtures do not cover is refused rather than silently accepted: a
+            # subset cut too small returns an empty sponge, not an error.
+            @test _central_glorys_subset((-75.0, -50.0), (40.0, 48.5); dir = dir) === nothing
+
+            # A missing directory is a miss, not a crash.
+            @test _central_glorys_subset(box...; dir = joinpath(dir, "nope")) === nothing
+        finally
+            isdir(dir) && rm(dir; recursive = true, force = true)
+        end
+    end
+
+    @testset "A boundary tracer interpolator takes axis values, not (values, Dimension)" begin
+        # `axis()` returns the coordinate values *and* the dimension record. The builder here
+        # assigned the pair to `lons`/`lats`/`deps` and then treated each as a vector, so
+        # `minimum(deps)` failed on a tuple the first time the GLORYS path ran -- and before
+        # that the path was unreachable, which is why nothing caught it.
+        using GeoDataSources: build_boundary_tracer_interpolators_geodata
+        dir = test_scratch()
+        try
+            lon = collect(-64.0:1.0:-60.0)
+            lat = collect(42.0:1.0:46.0)
+            dep = collect(0.0:5.0:25.0)
+            crs = CoordinateSystem(crs = "EPSG:4326")
+            dims = map(d -> Dimension(name = d, size = length(d == :lon ? lon :
+                                                                    d == :lat ? lat : dep),
+                                      coords = d == :lon ? lon : d == :lat ? lat : dep,
+                                      units = d == :lon ? "degrees_east" :
+                                              d == :lat ? "degrees_north" : "m",
+                                      dim_type = d == :lon || d == :lat ? GeoData.DIM_SPATIAL :
+                                              GeoData.DIM_PARAMETRIC),
+                        (:lon, :lat, :depth))
+            # longitude-weighted temperature and a flat salinity, so any axis mix-up shows.
+            temp = [Float64(i + j - k) for i in axes(lon, 1), j in axes(lat, 1), k in axes(dep, 1)]
+            salt = fill(31.0, length(lon), length(lat), length(dep))
+            mkpath(dir)
+            for (name, data, varname) in (("thetao", temp, "thetao"), ("so", salt, "so"))
+                vars = Dict{String, GeoArray}(varname => GeoArray(data, dims, crs, Dict()))
+                ds = GeoDataset(vars,
+                                Dict{Symbol, GeoArray}(:lon => GeoArray(lon, (dims[1],), crs, Dict()),
+                                                       :lat => GeoArray(lat, (dims[2],), crs, Dict()),
+                                                       :depth => GeoArray(dep, (dims[3],), crs, Dict())),
+                                Dict{Symbol, Dimension}(:lon => dims[1], :lat => dims[2],
+                                                        :depth => dims[3]), crs,
+                                Dict{String, Any}(), nothing, "boundary-fixture")
+                geosave(joinpath(dir, "$(varname).zarr"), ds; backend = :zarr)
+            end
+            res = build_boundary_tracer_interpolators_geodata(
+                joinpath(dir, "thetao.zarr"), joinpath(dir, "so.zarr");
+                T_name = "thetao", S_name = "so", months = [1])
+            @test res.S(-62.0, 44.0, 10.0, 1) == 31.0
+            # The value at an exact node is the fixture value there, not a surprise: this is
+            # what the previous tuple misuse prevented anything from reaching.
+            @test res.T(-62.0, 44.0, 0.0, 1) == temp[3, 3, 1]
+        finally
+            isdir(dir) && rm(dir; recursive = true, force = true)
+        end
+    end
+
+    @testset "A resolved cache path expands the store token" begin
+        # The tides defect: a caller testing `data_source(:tides).cache` with only
+        # `<output_dir>` substituted looks at a literal `<store>` directory, so the check was
+        # false for a 1.37 GB file that was on disk and the run re-fetched the 4.7 GB archive.
+        using GeoDataSources: resolved_cache_path
+        raw = GeoDataSources.data_source(:tides).cache
+        resolved = resolved_cache_path(:tides, "outputs/run")
+        @test occursin("<store>", raw)
+        @test !occursin("<store>", resolved)
+        @test normpath(resolved) == normpath(joinpath(GeoDataSources.store_root(), "tpxo9",
+                                                     "u_tpxo9.v1.nc"))
+        # The per-run form still works for a source that names `<output_dir>`.
+        woa = resolved_cache_path(:woa23, "outputs/run")
+        @test !occursin("<", woa)
     end
 
     @testset "A tidal atlas is checked against the domain it claims to cover" begin

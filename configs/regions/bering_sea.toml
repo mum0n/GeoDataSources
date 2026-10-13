@@ -34,5 +34,4 @@ variables = [
     "chlorophyll_a"
 ]
 
-output_path = "data/cubes/bering_sea_environmental.zarr"
 compressor = "zstd"

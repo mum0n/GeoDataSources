@@ -13,6 +13,61 @@ using Interpolations
 using Statistics
 
 """
+    _central_glorys_subset(lon, lat; dir = nothing) -> Union{String, Nothing}
+
+The GLORYS12V1 boundary subset already assimilated in the central store, when one covers the
+requested box, else `nothing`. `dir` defaults to the `glorys` directory of the central store
+and is a keyword so a test can pass a fixture directory without redirecting the store.
+
+The store is searched because the per-domain cache path in `input_dir` is not where the
+archive is kept: a subset downloaded once sits under the source's own directory, and looking
+for it only by its per-domain name re-downloads what is on disk. Coverage is checked rather
+than assumed, because a subset cut to a smaller box returns an empty sponge instead of an
+error, which is the failure that looks like a successful run.
+
+Latitude and longitude axes are read by name in either spelling — `longitude`/`latitude`, the
+Copernicus convention — so a NetCDF using the other one is still measured rather than skipped.
+"""
+function _central_glorys_subset(lon::Tuple{Float64, Float64}, lat::Tuple{Float64, Float64};
+                                dir::AbstractString = joinpath(store_root(), "glorys"))
+    isdir(dir) || return nothing
+    for name in sort(readdir(dir))
+        f = joinpath(dir, name)
+        endswith(name, ".nc") && isfile(f) || continue
+        got_lon = got_lat = nothing
+        try
+            ds = NCDataset(f)
+            try
+                for ax in ("longitude", "lon")
+                    if haskey(ds, ax)
+                        v = ds[ax]
+                        got_lon = (Float64(minimum(v)), Float64(maximum(v)))
+                        break
+                    end
+                end
+                for ax in ("latitude", "lat")
+                    if haskey(ds, ax)
+                        v = ds[ax]
+                        got_lat = (Float64(minimum(v)), Float64(maximum(v)))
+                        break
+                    end
+                end
+            finally
+                close(ds)
+            end
+        catch err
+            # An unreadable NetCDF is not a candidate; the loop continues to the next one.
+            continue
+        end
+        (got_lon === nothing || got_lat === nothing) && continue
+        got_lon[1] <= lon[1] && got_lon[2] >= lon[2] &&
+            got_lat[1] <= lat[1] && got_lat[2] >= lat[2] || continue
+        return f
+    end
+    return nothing
+end
+
+"""
     fetch_boundary_hydrography_geodata(source::Symbol;
         lon_range, lat_range, input_dir,
         month = 0, verbose = true) -> NamedTuple
@@ -54,17 +109,28 @@ function fetch_boundary_hydrography_geodata(source::Symbol;
     if source in (:glorys12v1, :glorys_climatology)
         p = joinpath(input_dir, "boundary_glorys_1993_$(lon[1])_$(lon[2])_$(lat[1])_$(lat[2]).zarr")
         if !isdir(p) && !isfile(p)
-            verbose && println("Fetching GLORYS12V1 boundary subset (Copernicus Marine)...")
-            # This would need the copernicus fetch to be adapted to GeoData
-            Copernicus.fetch_copernicus_physics_subset(
-                lon_range = lon_range, lat_range = lat_range,
-                start_date = "1993-01-01", end_date = "1993-12-31",
-                output_path = replace(p, ".zarr" => ".nc"),
-                dataset_id = "cmems_mod_glo_phy_my_0.083deg_P1M-m"
-            )
-            # Convert to zarr
-            ds = geoload(replace(p, ".zarr" => ".nc"); backend=:ncdatasets)
-            geosave(p, ds; backend=:zarr)
+            nc = replace(p, ".zarr" => ".nc")
+            nc = isfile(nc) ? nc : _central_glorys_subset(lon, lat)
+            if nc === nothing
+                verbose && println("Fetching GLORYS12V1 boundary subset (Copernicus Marine)...")
+                Copernicus.fetch_copernicus_physics_subset(
+                    lon_range = lon_range, lat_range = lat_range,
+                    start_date = "1993-01-01", end_date = "1993-12-31",
+                    output_path = replace(p, ".zarr" => ".nc"),
+                    dataset_id = "cmems_mod_glo_phy_my_0.083deg_P1M-m"
+                )
+                nc = replace(p, ".zarr" => ".nc")
+            else
+                # Already assimilated. Re-downloading a subset that is on disk is the whole
+                # reason the Copernicus console script is a dependency rather than the way
+                # this normally runs; the error it raises when the script is missing is
+                # indistinguishable from "the data is gone", so it is avoided.
+                verbose && println("Using the GLORYS12V1 subset already assimilated: $nc")
+            end
+            # Convert to zarr. Whichever file the science wants, the interpolator below
+            # reads one path, so the converted store is the cache and the .nc is kept as is.
+            ds = geoload(nc; backend = :ncdatasets)
+            geosave(p, ds; backend = :zarr)
         end
         m = month == 0 ? collect(1:12) : [max(1, min(12, month))]
         return build_boundary_tracer_interpolators_geodata(p, p; T_name = "thetao", S_name = "so",
@@ -113,12 +179,14 @@ function build_boundary_tracer_interpolators_geodata(
     temp_ds = geoload(temp_file)
     salt_ds = geoload(salt_file)
 
-    # Get coordinate arrays. `axis` names what is missing rather than silently handing
-      # Get coordinate arrays. `axis` names what is missing rather than silently handing
-      # back nothing, and it resolves aliases, so `t` or `datetime` is found too.
-      lons = axis(temp_ds, :lon)
-      lats = axis(temp_ds, :lat)
-      deps = axis(temp_ds, :depth)
+    # Get coordinate arrays. `axis` returns (values, Dimension), so the dimension record is
+    # dropped here: everything below works on the values, and taking the pair as-is made
+    # `minimum(deps)` fail on a tuple of (Vector, Dimension) the first time this path ran.
+    # `axis` names what is missing rather than silently handing back nothing, and it resolves
+    # aliases, so `t` or `datetime` is found too.
+    lons, _ = axis(temp_ds, :lon)
+    lats, _ = axis(temp_ds, :lat)
+    deps, _ = axis(temp_ds, :depth)
       # Time is optional: a static source legitimately has no time axis. The presence test
       # goes through the same alias table `axis` uses, so a file that spells the axis `t`
       # does not read as "no time axis" and silently fall back to a single frame.

@@ -78,8 +78,15 @@ three-attempt retry budget in `download_to_path` can never cover it. Eight strea
 ~4.4 MB/s, about 17 minutes, on the same URL.
 
 Nothing here interprets the archive. It is the same bytes, fetched faster; the ZIP is read
-afterwards by `ZipFile.Reader` in `Fetch/tides.jl`. Range support and the file size both come
-from a HEAD request first, so an unsized server is an error rather than a silent guess.
+afterwards by `ZipFile.Reader` in `Fetch/tides.jl`. The file size comes from a HEAD request
+first, so an unsized server is an error rather than a silent guess.
+
+Whether the server honours byte ranges is *not* read off `Accept-Ranges`. That header is
+optional, and the one source here proves it: Zenodo's `/content` endpoint serves the 4.7 GB
+TPXO9 archive, answers a range request with `206` and exactly the requested span, and sends
+no `Accept-Ranges` header at all — so requiring it refuses a download that works. Instead
+every piece is checked against the span it asked for, and a response that is the wrong size
+is an error naming both, rather than bytes written at the wrong offset.
 
 Each attempt rewrites only its own piece, so an interruption costs the remaining chunks
 rather than the whole file — which is the other thing `download_to_path` cannot do, since it
@@ -96,8 +103,6 @@ function download_ranges_parallel(url::AbstractString, path::AbstractString;
     total = something(tryparse(Int, get(head.headers, "Content-Length", "")), 0)
     total > 0 || error("$(url) returned no Content-Length, so its size is unknown and the " *
                       "download cannot be split by offset.")
-    get(head.headers, "Accept-Ranges", "none") == "bytes" ||
-        error("$(url) does not advertise Accept-Ranges, so it cannot be fetched in parallel.")
 
     mkpath(dirname(path))
     part = string(path, ".part")
@@ -122,6 +127,8 @@ function download_ranges_parallel(url::AbstractString, path::AbstractString;
                     try
                         r = HTTP.get(url; headers = ["Range" => "bytes=$a-$b"],
                                      retry = false)
+                        length(r.body) == b - a + 1 || error(
+                            "asked for bytes $a-$b ($(b - a + 1)) but got $(length(r.body))")
                         open(part, "r+") do f
                             seek(f, a)
                             write(f, r.body)

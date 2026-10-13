@@ -15,6 +15,12 @@ using GeoData.GeoDataTypes
 using GeoData: GeoDataset, GeoArray, CoordinateSystem, Dimension, geoload
 using ..CatalogModule: GeoDataCatalog, DatasetEntry, default_catalog_path,
     register_dataset!, save_catalog, geofetch
+# The lakehouse root is declared by the catalogue module, and one tier's layout must not own
+# the root: a submodule cannot see a sibling's name unqualified, so calling `lakehouse_root_dir`
+# here without importing it raised UndefVarError on the first `lakehouse_path`. `lakehouse_path`
+# is pure -- it never mkpath -- which is exactly why the root has to be resolvable without
+# touching the filesystem.
+using ..CatalogModule: lakehouse_root_dir
 using Dates
 using UUIDs
 using SHA
@@ -114,7 +120,11 @@ function compute_lakehouse_checksum(path::String)::String
             end
         end
     end
-    return bytes2hex(ctx.digest)
+    # `digest!` is what finalises the context and returns the bytes. The field named `digest`
+    # does not exist on a SHA2 context (it holds `state`, `bytecount`, `buffer`, `used`), so
+    # this raised a FieldError for every file it was asked to hash -- and nothing called it,
+    # because a checksum nobody asks for is a checksum nobody tests.
+    return bytes2hex(SHA.digest!(ctx))
 end
 
 """

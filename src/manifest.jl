@@ -31,6 +31,11 @@ import ..fetch_substrate_grainsize
 import ..fetch_nwa_bathymetry
 import ..fetch_tpxo9_velocity
 import ..is_cached
+# The central assimilation registry. Declared in the parent module, so it has to be named there:
+# an unqualified `store_root()` inside this module resolves against this module's own scope and
+# raises UndefVarError at the first `fetch_input`, because every cache template carries `<store>`
+# and the substitution runs before the cache check.
+import ..store_root
 
 """
     DataSource
@@ -94,7 +99,35 @@ end
 # Export the types and functions
 export DATA_SOURCES, DataSource, fetch_input, input_dir, file_digest, data_provenance,
     data_source, describe_data_sources, available_data, data_summary, buildable,
-    buildable_sources
+    buildable_sources, resolved_cache_path
+
+"""
+    resolved_cache_path(key::Symbol, output_dir::AbstractString) -> String
+
+The cache path `fetch_input` will actually look at for `key`, with every template token
+expanded: `<store>` becomes the central registry (`store_root()`), `<output_dir>` the caller's
+directory, and `<mm>` the zero-padded month.
+
+This exists so a caller can ask "is this source already assimilated?" without duplicating the
+substitution. Testing the raw `DataSource` `.cache` template instead substitutes only
+`<output_dir>` and leaves a literal `<store>` directory name in the path — a directory that
+never exists — so the test is false even when the archive is on disk, and the run re-fetches
+what it already has.
+"""
+function resolved_cache_path(key::Symbol, output_dir::AbstractString)::String
+    return resolved_cache_path(data_source(key), output_dir)
+end
+
+"""
+    resolved_cache_path(d::DataSource, output_dir::AbstractString) -> String
+
+The `DataSource` form, for a caller holding a source that is not in the declared registry
+(an overlay passed to `data_provenance`, say).
+"""
+function resolved_cache_path(d::DataSource, output_dir::AbstractString)::String
+    return replace(replace(replace(d.cache, "<output_dir>" => output_dir),
+                           "<store>" => store_root()), "<mm>" => "00")
+end
 
 """
     _truncate(s::AbstractString, n::Int = 96) -> String
@@ -187,8 +220,9 @@ end
     fetch_input(key::Symbol, output_dir::AbstractString; tier = nothing,
                 force::Bool = false, strict::Bool = true, kwargs...) -> String
 
-Ensure the input `key` is present in this run's inputs directory at the requested `tier`,
-and return the path to the cached artefact.
+Ensure the input `key` is present in its cache location — the central store for a source
+that declares one, and this run's inputs directory for one that does not — at the requested
+`tier`, and return the path to the cached artefact.
 
 This is the single dispatch point for "what data do we need" -> "how do we get it",
 tier by tier:
@@ -200,19 +234,23 @@ tier by tier:
 - **`:modelled`** - output of a numerical model or reanalysis (GLORYS, ERA5, TPXO9), at
   whatever resolution the model carries.
 
-`tier` selects *how* the artefact is produced, never *which* source: a source is a product
-(a dataset), a tier is a processing level (`:raw`, `:discretized`, `:modelled`). The
-default is the source's declared `tier`, so `fetch_input(:bottom_temperature, dir)` gets
-the raw table and `fetch_input(:glorys, dir)` gets the reanalysis.
+`tier` picks which table builds the artefact, and says nothing about which source it is:
+`:modelled` is looked up in `MODELLERS`, every other level in `FETCHERS`. Omitted, it is the
+source's own declared `tier` — `:raw` for `:bottom_temperature`, `:discretized` for `:tides`
+and most entries, `:modelled` for the reanalyses — and because `MODELLERS` is currently
+empty, a source that declares `:modelled` is obtained by a plain download of its `primary`
+URL rather than by a fetcher written for it. `buildable_sources()` is what lists what can
+actually be built.
 
 `force = true` re-fetches. An unavailable source is an error naming every alternative,
 never a silent substitution; `strict = false` lets an individual fetcher choose a
 labelled fallback. The cache check uses `is_cached`, so a Zarr store - a directory -
 counts as already present.
 
-A source that declares no fetcher for its tier is an error at *this* call, not a surprise
-later: a config naming a source the package cannot build should fail immediately, and
-`buildable_sources()` is the way to ask that question up front.
+A level nothing can produce is reported as what it currently is — a plain download of the
+`primary`, not an error — because that is what an empty `MODELLERS` table means. A key in
+neither table fails here, at the call, rather than surfacing later; `buildable(key, tier)`
+asks the same question up front.
 """
 function fetch_input(key::Symbol, output_dir::AbstractString; tier = nothing,
                      force::Bool = false, strict::Bool = true, kwargs...)
@@ -233,8 +271,7 @@ function fetch_input(key::Symbol, output_dir::AbstractString; tier = nothing,
     # `<store>` is the central, user-configurable registry (store_root()); `<output_dir>`
     # survives only for a template that still names it. Substituting `<store>` is what puts
     # every assimilated source under projects/lakehouse/GeoData/<source>, shared across runs.
-    target = replace(replace(replace(d.cache, "<output_dir>" => output_dir),
-                              "<store>" => store_root()), "<mm>" => "00")
+    target = resolved_cache_path(key, output_dir)
     if !force && is_cached(target) && _tier_matches_cache(target, d)
         return target
     end
@@ -548,8 +585,7 @@ function data_provenance(
 
     for key in sort!(collect(keys(sources)); by = string)
         d = sources[key]
-        rel = replace(replace(replace(d.cache, "<store>" => store_root()),
-                              "<output_dir>" => output_dir), "<mm>" => "00")
+        rel = resolved_cache_path(d, output_dir)
         present = isdir(rel) || isfile(rel)
         size_bytes = 0
         if isfile(rel)

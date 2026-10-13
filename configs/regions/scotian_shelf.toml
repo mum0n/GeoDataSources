@@ -37,8 +37,9 @@ variables = [
     "chlorophyll_a"
 ]
 
-# Temporary (tables must come after scalar keys in TOML).
-output_path = "data/cubes/scotian_shelf_environmental.zarr"
+# Cube output path: defaults to store_root()/cubes/scotian_shelf_environmental, set here
+# only to override it. The old `data/cubes/...` default is gone with the lakehouse; the old
+# temporary `data/` tree no longer exists, so anything in it would be a file in a missing dir.
 compressor = "zstd"
 
 # Temporal mode: "climatology", "timeseries", or "hybrid"

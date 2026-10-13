@@ -539,6 +539,10 @@ function bathymetry_dataset(; source = nothing,
     # a scratch destination here rather than passed down as `nothing` -- which every one of
     # them rejects with a TypeError, so the documented "nothing" path could never have run.
     destination = something(output_path, joinpath("inputs", "bathymetry.zarr"))
+    # A fetcher writes to a path the caller named, which may not exist yet. `NCDataset` reports
+    # a missing parent directory as "Permission denied" on Windows, which sends a reader
+    # hunting for a file lock that is not there. Create it here, so the failure is a real one.
+    mkpath(dirname(destination))
 
     ds = if resolved === :etopo
         # Store first: the cached relief tile is subset to the domain. If the store has no

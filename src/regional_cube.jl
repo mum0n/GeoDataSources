@@ -66,7 +66,7 @@ Base.@kwdef struct RegionalCubeConfig
         :u, :v, :dissolved_oxygen, :oxygen_saturation,
         :ph, :nitrate, :phosphate, :silicate, :chlorophyll_a
     ]
-    output_path::String = joinpath(store_root(), "cubes", "$(region_name)_cube.zarr")
+    output_path::String = joinpath(store_root(), "cubes", "$(region_name)_environmental")
     chunk_sizes::NamedTuple = (lon = 60, lat = 60, depth = 25, time = 12)
     compressor::Symbol = :zstd
     # Per-variable source choice. This is the level at which a decision is actually made:
@@ -234,7 +234,7 @@ function load_cube_config(path::AbstractString)::RegionalCubeConfig
     end
 
     out_p = String(get(raw, "output_path",
-                       joinpath(store_root(), "cubes", "$(rname)_cube.zarr")))
+                       joinpath(store_root(), "cubes", "$(rname)_environmental")))
     comp = Symbol(get(raw, "compressor", "zstd"))
 
     return RegionalCubeConfig(
