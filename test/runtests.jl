@@ -938,9 +938,11 @@ end
             @test found in (covering, covering2)
             @test endswith(string(found), ".nc")
 
-            # A box the fixtures do not cover is refused rather than silently accepted: a
-            # subset cut too small returns an empty sponge, not an error.
-            @test _central_glorys_subset((-75.0, -50.0), (40.0, 48.5); dir = dir) === nothing
+            # A box no fixture covers is refused rather than silently accepted: a subset cut
+            # too small returns an empty sponge, not an error. One case per axis, because
+            # coverage is checked along longitude and latitude separately.
+            @test _central_glorys_subset((-90.0, -70.0), (40.0, 48.5); dir = dir) === nothing
+            @test _central_glorys_subset((-71.0, -53.0), (20.0, 40.0); dir = dir) === nothing
 
             # A missing directory is a miss, not a crash.
             @test _central_glorys_subset(box...; dir = joinpath(dir, "nope")) === nothing
