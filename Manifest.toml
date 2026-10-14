@@ -2,7 +2,7 @@
 
 julia_version = "1.13.1"
 manifest_format = "2.1"
-project_hash = "177ad23ce2e626a7a5825bfd857a64e0d1e827f6"
+project_hash = "b4d9e883cb58f665457dbd98620eb2160f4f6205"
 
 [[deps.ADTypes]]
 deps = ["PrecompileTools"]
@@ -866,7 +866,7 @@ version = "1.2.0"
 
 [[deps.GeoData]]
 deps = ["ArchGDAL", "Base64", "CFTime", "CodecZlib", "DataFrames", "Dates", "Downloads", "GeoFormatTypes", "GeoInterface", "GeoJSON", "GeoParquet", "HTTP", "Interpolations", "JSON3", "LinearAlgebra", "NCDatasets", "Random", "Reexport", "SHA", "SparseArrays", "Statistics", "TOML", "TranscodingStreams", "UUIDs", "WellKnownGeometry", "YAXArrays", "Zarr"]
-path = "C:/Users/Nathalie/projects/GeoData"
+path = "../GeoData"
 uuid = "9b6fcbb8-86d6-11e9-1ce7-23a6bb139a78"
 version = "0.1.0"
 
