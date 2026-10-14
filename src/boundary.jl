@@ -96,12 +96,17 @@ function fetch_boundary_hydrography_geodata(source::Symbol;
         mm = lpad(string(month), 2, '0')
         tp = joinpath(input_dir, "woa23_temperature_$(mm)_0.25deg.zarr")
         sp = joinpath(input_dir, "woa23_salinity_$(mm)_0.25deg.zarr")
-        if !isfile(tp) || !isfile(sp)
+        # `isdir || isfile`, because the product the fetcher writes *is* a Zarr store: a
+        # directory. Testing `isfile` alone made this path fetch on every call and then
+        # reject its own download -- "WOA23 boundary needs ... in <dir>" with the very files
+        # the fetch had just saved into that directory sitting there. Same test as the
+        # GLORYS branch below, which already had it right.
+        if !(isdir(tp) || isfile(tp)) || !(isdir(sp) || isfile(sp))
             verbose && println("Fetching WOA23 climatology (keyless, NOAA)...")
             fetch_woa23(lon_range = lon_range, lat_range = lat_range,
                         month = month, output_dir = input_dir, backend=:zarr)
         end
-        (isfile(tp) && isfile(sp)) || error(
+        ((isdir(tp) || isfile(tp)) && (isdir(sp) || isfile(sp))) || error(
             "WOA23 boundary needs $(basename(tp)) and $(basename(sp)) in $(input_dir)")
         return build_boundary_tracer_interpolators_geodata(tp, sp; T_name = "t_an", S_name = "s_an")
     end

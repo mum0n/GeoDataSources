@@ -1,8 +1,16 @@
 ### A Pluto.jl notebook ###
-# v1.0.4
+# v1.0.3
 
 using Markdown
 using InteractiveUtils
+
+# ╔═╡ 9f166500-c806-11f1-b6b2-6d98e9fcf603
+# ╠═╡
+using Pkg
+
+# ╔═╡ 9f166500-c806-11f1-a9bf-d390270f4a24
+# ╠═╡
+Pkg.activate(@__DIR__)
 
 # ╔═╡ 1a5f30e2-8d7c-4b21-9604-3f5e9c8a7b11
 # ╠═╡
@@ -24,7 +32,7 @@ run on the machine, whatever asks for it. Where the store root is, and how to mo
 second cell, because everything else depends on that answer.
 """
 
-# ╔═╡ 6fa4e8537-d2c1-4a76-eb59-8fbe5cefd077
+# ╔═╡ 9f166500-c806-11f1-b470-1d0497e43053
 # ╠═╡
 md"""
 ## Running this notebook
@@ -41,19 +49,11 @@ everything downstream — which is what makes asking "what if I move the store r
 change rather than a rebuild.
 """
 
-# ╔═╡ 2b60a41f3-9e8d-4c32-a715-4a6f0d9b8c22
-# ╠═╡
-using Pkg
-
-# ╔═╡ 3c71b5204-a9fe-4d43-b826-5b7a1eac9d33
+# ╔═╡ 9f166500-c806-11f1-8177-890a6f9feb11
 # ╠═╡
 cd(joinpath(@__DIR__, ".."))
 
-# ╔═╡ 4d82c6315-b0af-4e54-c937-6c8b2fbdae44
-# ╠═╡
-Pkg.activate(@__DIR__)
-
-# ╔═╡ 5e93d7426-c1b0-4f65-da48-7d9c3acebf55
+# ╔═╡ 9f166500-c806-11f1-a708-4d2c609c7dd2
 # ╠═╡
 # `GeoDataSources` re-exports `GeoData`, so one `using` gives both. The three below are what a
 # coastline and a catalogue entry need, and they are direct dependencies of this package, so the
@@ -62,7 +62,7 @@ using GeoDataSources
 using GeoData
 using GeoInterface, GeoParquet, DataFrames
 
-# ╔═╡ 70b5f9648-e3d2-4b87-fc6a-9fbe5cefd077
+# ╔═╡ 9f166500-c806-11f1-93ae-992c31c96025
 # ╠═╡
 md"""
 ## The central store: one registry, one file to move it
@@ -87,7 +87,7 @@ The cell below is read-only: it reports the current configuration. The point is 
 downloading them again.
 """
 
-# ╔═╡ 81c60a759-f4e3-4c98-ad7b-bcf6dface088
+# ╔═╡ 9f166500-c806-11f1-afad-49bb6272d9c9
 # ╠═╡
 println("store_root    : ", store_root())
 println("configured in : ", storage_file_path())
@@ -99,7 +99,7 @@ println("tpxo9         : ", store_path("tpxo9"))
 existing = [p for p in readdir(store_root()) if isdir(joinpath(store_root(), p))]
 println("\nsource directories already in the store: ", existing)
 
-# ╔═╡ 92d71b860-a05f-4a09-be8c-cdf7eabfd199
+# ╔═╡ 9f166500-c806-11f1-bb40-19f0ca30a6f3
 # ╠═╡
 md"""
 ## Tiers: how the data were made, not what they are
@@ -134,7 +134,7 @@ was made, the other where a project's own artefacts sit. The cell on the catalog
 lakehouse one; the cells up to here use the manifest one.
 """
 
-# ╔═╡ a3e82c971-b1a0-4b1a-9f9d-def8bfce2a0a
+# ╔═╡ 9f166500-c806-11f1-8bd3-0d4cb6579941
 # ╠═╡
 md"""
 ## The declared registry: what can be asked for, and what it costs
@@ -155,7 +155,7 @@ Access states, and they are not the same claim:
 time** rather than hours into a run.
 """
 
-# ╔═╡ b4f93da82-c2b1-4c2b-aade-ef09cdd03b1b
+# ╔═╡ 9f166500-c806-11f1-90b0-833d41239230
 # ╠═╡
 rows = available_data()
 
@@ -171,7 +171,7 @@ println("\nbuildable sources              : ", join(string.(buildable_sources())
 println("the Copernicus boundary        : buildable=", buildable(:lateral_boundary),
         ", needs an account=", !boundary.keyless)
 
-# ╔═╡ c50a3eb93-d3c2-4c3b-bbef-ff0dcee14c2c
+# ╔═╡ 9f166500-c806-11f1-a13b-47c6f8dcaa76
 # ╠═╡
 md"""
 ## Fetching: cache first, then the network, never a substitution
@@ -194,7 +194,7 @@ demonstrates the cache-first path without a download, and prints where the artef
 lives. If your central store has no `bathymetry`, pick a source in the table above that it does.
 """
 
-# ╔═╡ d61b4fca4-e4d3-4d4c-ccf0-012def25d3d
+# ╔═╡ 9f166500-c806-11f1-8530-bb14b1d944d0
 # ╠═╡
 # `strict` and `force` are the two options worth understanding; `tier` is the one worth naming
 # explicitly when a source offers more than one processing level.
@@ -214,7 +214,7 @@ println("same artefact  : ", abspath(path) == abspath(target))
 println("inside the store: ", startswith(abspath(path), abspath(store_root())),
         "   a machine-level asset, not a per-run download")
 
-# ╔═╡ e72c50db5-f5e4-4e5c-bf11-123faf36e4e
+# ╔═╡ 9f166500-c806-11f1-8002-235a8db1af94
 # ╠═╡
 md"""
 ## The downloader: scratch, then a rename
@@ -229,7 +229,7 @@ consequences worth knowing:
   multi-gigabyte tidal atlas and the temp volume is small.
 """
 
-# ╔═╡ f83061ec6-a0f5-4f6e-bf22-234bcf47f5f
+# ╔═╡ 9f166500-c806-11f1-bea5-cb95a4376473
 # ╠═╡
 md"""
 ## Bathymetry: a named source wins, coverage decides otherwise
@@ -255,7 +255,7 @@ of metres, and neither is wrong — which is why you pick one per run and record
 averaging them into a bathymetry that came from nowhere.
 """
 
-# ╔═╡ 091720fd7-b1a6-4a06-bf33-345cdf58a6a0
+# ╔═╡ 9f166500-c806-11f1-84b0-199fa75356d0
 # ╠═╡
 for (label, lon_r, lat_r) in (("scotian shelf (inside the CHS survey)", (-62.5, -61.5), (45.5, 46.5)),
                               ("mid-Pacific (no regional survey)", (-150.0, -149.0), (20.0, 21.0)),
@@ -276,7 +276,7 @@ catch err
     println("\nunknown name -> error: ", first(split(sprint(showerror, err), "\n")))
 end
 
-# ╔═╡ 1a2831fe8-c2b7-4b17-bf44-456def69b1b1
+# ╔═╡ 9f168c10-c806-11f1-a245-97fdf1864dc4
 # ╠═╡
 md"""
 ## The coastline: a vector outline, not a grid
@@ -300,7 +300,7 @@ The cell below writes its own small coastline instead of downloading one, so it 
 while still exercising the real reader.
 """
 
-# ╔═╡ 2b3942079-d3c8-4c28-bf55-567efa70c2c2
+# ╔═╡ 9f168c10-c806-11f1-bded-df6264ce55d1
 # ╠═╡
 ring_path = normpath(joinpath("scratch", "notebook_sources", "coastline.parquet"))
 mkpath(dirname(ring_path))
@@ -342,7 +342,7 @@ declared_coast = replace(GeoDataSources.DATA_SOURCES[:coastline].cache,
 println("\nwhere a fetched coastline goes: ", declared_coast)
 println("already cached on this machine: ", is_cached(declared_coast))
 
-# ╔═╡ 4d5b64291-f5ea-4e4a-bf77-789bca92e4e4
+# ╔═╡ 9f168c10-c806-11f1-8014-9bf982ad1207
 # ╠═╡
 md"""
 ## The other sources, and what each is for
@@ -360,7 +360,7 @@ The pattern in the options column is the same everywhere: a cache check first, a
 every alternative second, and a labelled fallback only when the caller opts in.
 """
 
-# ╔═╡ 61c0e2503-b2d1-4d59-bf99-9abcdef12345
+# ╔═╡ 9f168c10-c806-11f1-b047-d7445f18ceb8
 # ╠═╡
 md"""
 ## Provenance: which bytes produced this result
@@ -378,7 +378,7 @@ A run does not just consume data; it records what it consumed.
 - `is_cached` (not `isfile`) is the cache test everywhere, because a Zarr store is a directory.
 """
 
-# ╔═╡ 72d1f3614-c3e2-4e6a-210c-abdef2345678
+# ╔═╡ 9f168c10-c806-11f1-aea2-d7b3315aa5db
 # ╠═╡
 using JSON3
 
@@ -408,7 +408,7 @@ for f in ("title", "cache", "present", "bytes", "sha256", "license")
     println("  ", rpad(f, 8), " ", getproperty(entry, Symbol(f)))
 end
 
-# ╔═╡ 83e204725-d4f3-4b7c-321d-bcef34567890
+# ╔═╡ 9f168c10-c806-11f1-bf85-4390b53ca5d3
 # ╠═╡
 md"""
 ## The catalog and the lakehouse tiers
@@ -431,7 +431,7 @@ The tiers are `lakehouse_tiers() == [:raw, :processed, :derived]`, and the root 
 project was **given**, the other what it **produces**.
 """
 
-# ╔═╡ 94f315836-e5a0-4c8d-432e-cdfa456789a1
+# ╔═╡ 9f168c10-c806-11f1-bff8-79b1ab040dcc
 # ╠═╡
 # A small dataset, built the way the GeoData notebook builds one, so the catalogue has a real
 # artefact to describe.
@@ -480,7 +480,7 @@ catch err
     println("\nsame key again -> ", first(split(sprint(showerror, err), "\n")))
 end
 
-# ╔═╡ a504426a4f-b1c-4d29-543f-defb567890b2
+# ╔═╡ 9f168c10-c806-11f1-8e9a-27ce8286d453
 # ╠═╡
 md"""
 ## Use cases, end to end
@@ -518,8 +518,7 @@ you asked for.
 Design and per-source layout: `GeoDataSources/STORAGE.md`.
 """
 
-# ╔═╡ b615540b5a-2c3-4e5a-654f-efbc678901c3
-# ╠═╡ Cell order:
+# ╔═╡ 9f168c10-c806-11f1-a8a0-2918bf688239
 # ╠═1a5f30e2-8d7c-4b21-9604-3f5e9c8a7b11
 # ╠═6fa4e8537-d2c1-4a76-eb59-8fbe5cefd077
 # ╠═2b60a41f3-9e8d-4c32-a715-4a6f0d9b8c22
@@ -544,4 +543,31 @@ Design and per-source layout: `GeoDataSources/STORAGE.md`.
 # ╠═83e204725-d4f3-4b7c-321d-bcef34567890
 # ╠═94f315836-e5a0-4c8d-432e-cdfa456789a1
 # ╠═a504426a4f-b1c-4d29-543f-defb567890b2
-# ╠═b615540b5a-2c3-4e5a-654f-efbc678901c3
+# ╠═b615540b5a-2c3-4e5a-654f-efbc678901c
+
+# ╔═╡ Cell order:
+# ╠═1a5f30e2-8d7c-4b21-9604-3f5e9c8a7b11
+# ╠═9f166500-c806-11f1-b470-1d0497e43053
+# ╠═9f166500-c806-11f1-b6b2-6d98e9fcf603
+# ╠═9f166500-c806-11f1-8177-890a6f9feb11
+# ╠═9f166500-c806-11f1-a9bf-d390270f4a24
+# ╠═9f166500-c806-11f1-a708-4d2c609c7dd2
+# ╠═9f166500-c806-11f1-93ae-992c31c96025
+# ╠═9f166500-c806-11f1-afad-49bb6272d9c9
+# ╠═9f166500-c806-11f1-bb40-19f0ca30a6f3
+# ╠═9f166500-c806-11f1-8bd3-0d4cb6579941
+# ╠═9f166500-c806-11f1-90b0-833d41239230
+# ╠═9f166500-c806-11f1-a13b-47c6f8dcaa76
+# ╠═9f166500-c806-11f1-8530-bb14b1d944d0
+# ╠═9f166500-c806-11f1-8002-235a8db1af94
+# ╠═9f166500-c806-11f1-bea5-cb95a4376473
+# ╠═9f166500-c806-11f1-84b0-199fa75356d0
+# ╠═9f168c10-c806-11f1-a245-97fdf1864dc4
+# ╠═9f168c10-c806-11f1-bded-df6264ce55d1
+# ╠═9f168c10-c806-11f1-8014-9bf982ad1207
+# ╠═9f168c10-c806-11f1-b047-d7445f18ceb8
+# ╠═9f168c10-c806-11f1-aea2-d7b3315aa5db
+# ╠═9f168c10-c806-11f1-bf85-4390b53ca5d3
+# ╠═9f168c10-c806-11f1-bff8-79b1ab040dcc
+# ╠═9f168c10-c806-11f1-8e9a-27ce8286d453
+# ╠═9f168c10-c806-11f1-a8a0-2918bf688239

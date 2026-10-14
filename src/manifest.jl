@@ -98,21 +98,26 @@ end
 
 # Export the types and functions
 export DATA_SOURCES, DataSource, fetch_input, input_dir, file_digest, data_provenance,
-    data_source, describe_data_sources, available_data, data_summary, buildable,
-    buildable_sources, resolved_cache_path
+       data_source, describe_data_sources, available_data, data_summary, buildable,
+       buildable_sources, resolved_cache_path, tier_path
 
 """
     resolved_cache_path(key::Symbol, output_dir::AbstractString) -> String
 
-The cache path `fetch_input` will actually look at for `key`, with every template token
-expanded: `<store>` becomes the central registry (`store_root()`), `<output_dir>` the caller's
-directory, and `<mm>` the zero-padded month.
+The cache path `fetch_input` will look at for `key`, with every template token expanded:
+`<store>` becomes the central registry (`store_root()`), `<output_dir>` the caller's directory,
+and `<mm>` the zero-padded month.
 
-This exists so a caller can ask "is this source already assimilated?" without duplicating the
-substitution. Testing the raw `DataSource` `.cache` template instead substitutes only
-`<output_dir>` and leaves a literal `<store>` directory name in the path — a directory that
-never exists — so the test is false even when the archive is on disk, and the run re-fetches
-what it already has.
+The manifest's cache templates carry the medallion tier explicitly (`<store>/raw/…`,
+`<store>/discretized/…`, `<store>/modelled/…`), so this path *is* the medallion path: ingestion
+writes where a reader looks, and there is no second function to keep in step. That was not
+always so — the templates used to name a top-level `<store>/<<key>>/` directory, the tiers
+described where products *should* be instead of where they were, and the store accumulated an
+`ingested/` tier and a `modelled/` tier that did not exist.
+
+Sources that share one product have separate entries with the same tier directory:
+`:atmosphere` and `:surface_winds` both point at `modelled/era5.zarr`, because ERA5 serves
+both variables and a copy per source would be two copies of one archive.
 """
 function resolved_cache_path(key::Symbol, output_dir::AbstractString)::String
     return resolved_cache_path(data_source(key), output_dir)
@@ -127,6 +132,59 @@ The `DataSource` form, for a caller holding a source that is not in the declared
 function resolved_cache_path(d::DataSource, output_dir::AbstractString)::String
     return replace(replace(replace(d.cache, "<output_dir>" => output_dir),
                            "<store>" => store_root()), "<mm>" => "00")
+end
+
+"""
+    tier_path(key::Symbol; ext::Union{Nothing, AbstractString} = nothing) -> String
+
+Where a source's assimilated product lives **under the medallion scheme**:
+`<store>/<tier>/<key>.<ext>`, with the tier from the source's declared processing level.
+
+This is now where products actually are. `resolved_cache_path` returns this path, so ingestion
+writes it and readers read it from the same function — the two views the audit found disagreeing
+for 12 of 12 sources are now one. The store no longer has a top level holding `<source>/`
+directories, an `ingested/` tier nothing documents, or a `modelled/` tier that did not exist.
+
+Three tiers, and each is a directory the scheme owns:
+
+| declared level | tier | what it holds |
+|---|---|---|
+| `:raw` | `raw/` | the source as delivered, format aside |
+| `:discretized` | `discretized/` | gridded/cleaned onto a regular grid |
+| `:modelled` | `modelled/` | a numerical model or reanalysis product |
+
+`ext` defaults to the type the product actually is, not to `zarr`: a Zarr store is a directory
+and a NetCDF archive is a file, and writing `.zarr` onto a `.nc` would mark every NetCDF
+product as a Zarr store the reader cannot open. It is taken from the manifest's own cache
+template, so the extension is a record of how the product is stored rather than a guess here.
+
+`:gridded` is not one of the three levels, and a source carrying it gets `raw/` rather than an
+error — a level this register does not recognise should not make a path unresolvable.
+
+`lakehouse_path` is the same idea with the Bronze/Silver/Gold vocabulary and a different tier
+set; they are not the same scheme. Callers want one path per product, so this is the one.
+"""
+function tier_path(key::Symbol; ext::Union{Nothing, AbstractString} = nothing)
+    root = store_root()
+    d = data_source(key)
+    dir = d.tier === :discretized ? "discretized" :
+          d.tier === :modelled ? "modelled" : "raw"
+    use_ext = isnothing(ext) ? _product_extension(d) : ext
+    clean = startswith(String(use_ext), ".") ? String(use_ext)[2:end] : String(use_ext)
+    return joinpath(root, dir, "$(key).$(clean)")
+end
+
+"""
+    _product_extension(d::DataSource) -> String
+
+The extension the product is actually stored with, from its own cache template. `zarr` when the
+template names no extension at all (a Zarr store is a directory, so a bare directory path is the
+Zarr convention) and the template's suffix otherwise.
+"""
+function _product_extension(d::DataSource)::String
+    base = basename(rstrip(d.cache, ('/', '\\')))
+    ext = splitext(base)[2]
+    isempty(ext) ? "zarr" : ext[2:end]
 end
 
 """
@@ -234,13 +292,17 @@ tier by tier:
 - **`:modelled`** - output of a numerical model or reanalysis (GLORYS, ERA5, TPXO9), at
   whatever resolution the model carries.
 
-`tier` picks which table builds the artefact, and says nothing about which source it is:
-`:modelled` is looked up in `MODELLERS`, every other level in `FETCHERS`. Omitted, it is the
-source's own declared `tier` — `:raw` for `:bottom_temperature`, `:discretized` for `:tides`
-and most entries, `:modelled` for the reanalyses — and because `MODELLERS` is currently
-empty, a source that declares `:modelled` is obtained by a plain download of its `primary`
-URL rather than by a fetcher written for it. `buildable_sources()` is what lists what can
-actually be built.
+`tier` says what processing level the artefact belongs to, which is a property of the data and
+not of the request. It is what `tier_path` uses to place the product under the medallion
+scheme; it does **not** choose the builder. The builder is chosen by availability: a fetcher
+registered for the key is used, because it is the one that knows how to obtain this source,
+and MODELLERS is consulted only for a key no fetcher knows. (Making `tier` the dispatch key
+too was what made an honest classification — TPXO9 is a tidal *model* product — silently
+reroute ingestion to a plain URL download of the archive.)
+
+Omitted, `tier` is the source's own declared level — `:raw` for `:bottom_temperature`,
+`:discretized` for `:woa23` and the measured-gap products, `:modelled` for the reanalyses and
+the tidal solution. `buildable_sources()` lists what can actually be built.
 
 `force = true` re-fetches. An unavailable source is an error naming every alternative,
 never a silent substitution; `strict = false` lets an individual fetcher choose a
@@ -280,9 +342,20 @@ function fetch_input(key::Symbol, output_dir::AbstractString; tier = nothing,
     d.kind == :analytic && error(
         "Input $(repr(key)) is analytic and is generated by the model, not downloaded. $(d.notes)")
 
-    # A modelled tier is produced by a modeller, not a fetcher; the two share the
-    # `(path; output_dir, force, strict, kwargs...)` shape so this dispatch is uniform.
-    fetcher = tier === :modelled ? get(MODELLERS, key, nothing) : get(FETCHERS, key, nothing)
+    # Which table builds this artefact, and the two are not the same question. `tier` is a
+    # *classification* — what processing level the product belongs to, which is what
+    # `tier_path` uses to place it — and using it to pick the builder table made the two
+    # meanings collide: tagging TPXO9 honestly as `:modelled` sent `fetch_input(:tides)` to
+    # the empty MODELLERS table and fell through to a plain download of the 4.7 GB archive
+    # with no extraction, so a documentation change silently broke ingestion.
+    #
+    # Dispatch is therefore by availability: a fetcher that exists for the key wins, because
+    # it is the one that knows how to build this source. MODELLERS is consulted only for a
+    # key no fetcher knows, which is what an empty table means.
+    fetcher = get(FETCHERS, key, nothing)
+    if isnothing(fetcher) && tier === :modelled
+        fetcher = get(MODELLERS, key, nothing)
+    end
     fetcher === nothing && return _fetch_input_by_url(d, target)
     # Every fetcher writes into the central store. Most take `output_path` (the resolved
     # `target`); `fetch_woa23` takes `output_dir` and names the file itself, so it is handed
@@ -677,12 +750,12 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "GEBCO via NCEI: https://www.ncei.noaa.gov/products/global-relief-model (keyless, coarser)",
             "No fallback is applied. An unavailable dataset aborts the run; see :bathymetry notes.",
         ],
-        "<store>/etopo2022.bathymetry",
+        "<store>/discretized/bathymetry.nc",
         "Public domain (NOAA)",
         "Configured by [data] bathy_source. The dataset id 'etopo2022' resolves to " *
         "ETOPO_2022_v1_15s.nc. Set it to 'synthetic' to generate an analytical shelf " *
         "instead and run with no network at all.",
-        tier = :modelled,
+        tier = :discretized,
 
     ),
 
@@ -697,7 +770,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "Provides temperature, salinity, u, v, sea surface height, MLD",
             "1/12° horizontal, 50 vertical levels, 3-hourly to daily output",
         ],
-        "<store>/glorys",
+        "<store>/modelled/glorys.zarr",
         "Copernicus Marine Service - GLOBAL_MULTIYEAR_PHY_001_030",
         "Requires ~/.copernicusmarine/credentials; free registration at marine.copernicus.eu",
         tier = :modelled,
@@ -724,7 +797,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "ParticleTracking already makes this call: GLORYS for `ocean_boundary_source` " *
             "because it carries currents, WOA23 for the initial condition.",
         ],
-        "<store>/woa23_temperature_<mm>_0.25deg",
+        "<store>/discretized/hydrography_temperature_<mm>.zarr",
         "Public domain (NOAA)",
         "Configured by [data] hydrography_source. The 1.00 degree monthly files are used and " *
         "regridded onto the model grid; the 0.25 degree product is a large download for the " *
@@ -745,7 +818,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "WOA23 at its native 0.25 degree grid is available from the same directory when " *
             "the 1 degree climatology is too coarse for the domain.",
         ],
-        "<store>/woa23_oxygen_<mm>_0.25deg",
+        "<store>/discretized/woa23_oxygen_<mm>_0.25deg.nc",
         "Public domain (NOAA).",
         "Fetched by `fetch_woa23_hydrography(..., include_o2 = true)`, the same reader as " *
         "temperature and salinity, since it is the same NOAA NCEI collection and depth " *
@@ -769,7 +842,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "Global Wind Atlas: https://globalwindatlas.info (keyless, climatological only).",
             "The SAME physical product `:atmosphere` carries. That entry describes the whole surface state -- stress plus air temperature, pressure, humidity, cloud and shortwave -- while this one names the winds alone, because that is what `[data] wind_source` and `[atmosphere] forcing` select and what `lakehouse/GeoData/era5.zarr` holds. Two keys, one dataset: the registry is keyed by what a run can ask for, not by how many files exist.",
         ],
-        "<store>/era5",
+        "<store>/modelled/era5.zarr",
         "Public domain (Copernicus ERA5 / Open-Meteo).",
         "Fetched by `fetch_open_meteo_winds` with the ERA5 surface state ingested alongside the " *
         "stress on the same hourly time axis, so stress and heat flux vary in time together. " *
@@ -791,7 +864,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "ERA5 from the Copernicus Climate Data Store: https://cds.climate.copernicus.eu (KEYLESS for the public ERA5 subset)",
             "Global Wind Atlas: https://globalwindatlas.info (keyless, climatological only)",
         ],
-        "<store>/era5",
+        "<store>/modelled/era5.zarr",
         "See :surface_winds",
         "The fetcher ingests the ERA5 surface state alongside the winds -- air temperature, " *
         "surface pressure, relative humidity, cloud fraction and incoming shortwave -- on the " *
@@ -818,7 +891,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "Scope limit, verified from the fetcher's own command: it requests only `--variable thetao --variable so`. It does NOT request u/v. So this input constrains temperature and salinity at the sponge, not the normal velocity, and the earlier note's claim that it 'carries velocities, which is what a sponge actually needs' does not hold for the subset actually taken. The open edge is still only as open as the relaxation constants in [boundaries] u_inflow/v_inflow.",
             "NCAR GDEX holds a keyless record for GLORYS12V1 (d010049, DOI 10.5065/3NSD-QP06) with 'Access Constraints: None', but its dataset catalog is empty -- no files -- so it does not serve data. A metadata record is not a served file.",
         ],
-        "<store>/glorys_boundary.nc",
+        "<store>/modelled/lateral_boundary.nc",
         "Copernicus Marine Service - GLOBAL_MULTIYEAR_PHY_001_030."
         ,
         "Fetched by `fetch_copernicus_physics_subset` through `_fetcher_copernicus_physics`. " *
@@ -842,7 +915,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "The archive is a whole-world file of ~4100 LineString features (about 10 MB). `fetch_natural_earth_coastline` clips it to the run's domain plus a margin before writing, so a regional run stores only the segments it needs.",
             "Coarser 50 m and 110 m series are available via `[data] coastline_source` when only a regional outline is wanted.",
         ],
-        "<store>/coastline.parquet",
+        "<store>/discretized/coastline.parquet",
         "Public domain (Natural Earth).",
         "Written as lon,lat vertex lists grouped under `> name,code` headers, the format " *
         "`load_coastline_polygons` reads. This replaces the hand-drawn regional outline that " *
@@ -861,7 +934,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "TPXO9-Atlas from the publisher, https://www.tpxo.atlas.oregonstate.edu (free and open, but the host does not resolve from every network, including this one).",
             "FES2014 / FES2022 from AVISO, https://www.aviso.altimetry.fr (AVISO requires a free account).",
         ],
-        "<store>/tpxo9/u_tpxo9.v1.nc",
+        "<store>/modelled/tpxo9.nc",
         "TPXO9-Atlas: CC-BY-4.0.",
           "u_tpxo9.v1.nc carries the VELOCITY harmonics on the staggered u/v grids, in " *
           "BOTH of the two forms TPXO9-Atlas ships: amplitude/phase " *
@@ -872,9 +945,10 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
           "15 constituents: m2, s2, n2, k2, k1, o1, p1, q1, mm, mf, m4, mn4, " *
           "ms4, 2n2, s1. A barotropic open boundary is driven by the normal " *
           "velocity, so the velocity product is what the boundary forcing needs. " *
-          "Note the two conventions that are easy to get wrong: longitude is 0..360 " *
-          "rather than -180..180, and the imaginary part enters with a MINUS sign " *
-          "(the files document `phase = atan2(-hIm, hRe)`)."
+           "Note the two conventions that are easy to get wrong: longitude is 0..360 " *
+           "rather than -180..180, and the imaginary part enters with a MINUS sign " *
+           "(the files document `phase = atan2(-hIm, hRe)`).",
+        tier = :modelled,
     ),
 
     :bottom_temperature => DataSource(
@@ -892,7 +966,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "product the ocean model actually runs on; this one supplements it and is not " *
             "what forces the hydrodynamic simulation.",
         ],
-        "<store>/bottom_temperature",
+        "<store>/raw/bottom_temperature.parquet",
         "Canadian Department of Fisheries and Oceans survey archive; see the `project` " *
         "column of the raw table for the 30 contributing programmes.",
         "442177 observations from 1970 to 2025 across 30 survey programmes (Groundfish, " *
@@ -920,7 +994,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "No alternative: the underlying raw sediment samples are not publicly " *
             "available, so this interpolated surface is the only local substrate product.",
         ],
-        "<store>/substrate",
+        "<store>/discretized/substrate.parquet",
         "Canadian Hydrographic Service / DFO sediment compilation.",
         "714063 points spanning lon -67.7..-57.1, lat 41.3..47.0, grain diameter " *
         "0.003..33.2 mm (mud to cobble). This is ALREADY INTERPOLATED surface data: the " *
@@ -947,7 +1021,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "products and are NOT interchangeable: they differ on the shelf by metres to " *
             "tens of metres, and neither is wrong. Choose one per run.",
         ],
-        "<store>/nwa_bathymetry",
+        "<store>/discretized/nwa_bathymetry.zarr",
         "Canadian Hydrographic Service, Northwest Atlantic soundings.",
         "28142338 XYZ rows spanning lon -72..-42 and lat 40..64, on a REGULAR 15 arc-second " *
         "lattice of 7201 x 5761 nodes with land cells omitted (41.5M lattice cells, 28.1M " *

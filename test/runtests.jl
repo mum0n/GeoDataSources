@@ -1007,8 +1007,8 @@ end
         resolved = resolved_cache_path(:tides, "outputs/run")
         @test occursin("<store>", raw)
         @test !occursin("<store>", resolved)
-        @test normpath(resolved) == normpath(joinpath(GeoDataSources.store_root(), "tpxo9",
-                                                     "u_tpxo9.v1.nc"))
+        @test normpath(resolved) == normpath(joinpath(GeoDataSources.store_root(),
+                                                     "modelled", "tpxo9"))
         # The per-run form still works for a source that names `<output_dir>`.
         woa = resolved_cache_path(:woa23, "outputs/run")
         @test !occursin("<", woa)
@@ -1207,5 +1207,77 @@ end
         window = (lon_range = (-64.0, -63.0), lat_range = (44.0, 45.0))
         st = fetch_substrate_grainsize(; window...)
         @test count(isfinite, st.variables["substrate"].data) == 79
+    end
+
+    @testset "Every product lands in a medallion tier, by its declared level" begin
+        # The move: the manifest's cache templates used to name a top-level `<store>/<source>/`
+        # directory, so a source's declared processing level was prose about where a product
+        # *should* be and every artefact sat wherever it was fetched. The store held an
+        # `ingested/` tier nothing documents and had no `modelled/` tier at all. Now the tier
+        # is in the template, so the two cannot drift apart.
+        #
+        # This pins the two properties that made the move safe to do in code rather than by
+        # moving files by hand: that the path is derived (nothing hard-codes a location), and
+        # that the directory is the declared level, so a reader following `resolved_cache_path`
+        # ends up in the same tier the writer used.
+        root = GeoDataSources.store_root()
+        short(p) = replace(p, root => "<store>")
+
+        for (key, dir) in ((:bathymetry, "discretized"),
+                           (:coastline, "discretized"),
+                           (:substrate, "discretized"),
+                           (:nwa_bathymetry, "discretized"),
+                           (:glorys, "modelled"),
+                           (:atmosphere, "modelled"),
+                           (:surface_winds, "modelled"),
+                           (:lateral_boundary, "modelled"),
+                           (:tides, "modelled"),
+                           (:bottom_temperature, "raw"))
+            p = short(GeoDataSources.resolved_cache_path(key, "."))
+            # Compared with forward slashes because the templates are written with them and
+            # `splitpath` on Windows would normalise to backslashes on both sides of the
+            # comparison — which is true of a wrong answer too.
+            @test occursin("/$(dir)/", p)
+        end
+
+        # And none of them lives at the store's top level any more, which is the actual change:
+        # the source name must not appear as a directory directly under `<store>`.
+        for key in keys(GeoDataSources.DATA_SOURCES)
+            rel = replace(GeoDataSources.resolved_cache_path(key, "."),
+                          GeoDataSources.store_root() => "")
+            top = first(splitpath(lstrip(rel, ('/', '\\'))))
+            @test top in ("raw", "discretized", "modelled")
+        end
+
+        # Sources that share one archive share its path, rather than each carrying a copy.
+        @test GeoDataSources.resolved_cache_path(:atmosphere, ".") ==
+              GeoDataSources.resolved_cache_path(:surface_winds, ".")
+    end
+end
+
+    @testset "A tier label never removes a fetcher from dispatch" begin
+        # The regression this pins: `tier` was both the classification and the dispatch key,
+        # so tagging TPXO9 honestly as `:modelled` sent `fetch_input(:tides)` to the empty
+        # MODELLERS table, fell through to a plain download of the 4.7 GB archive, and
+        # produced a run with no tidal harmonic extraction at all. A documentation change
+        # silently broke ingestion.
+        #
+        # No `const` here: a `@testset` body is wrapped in a `let`, and `const` is not
+        # allowed on a local, which this testset itself was the first to break.
+        m = GeoDataSources.GeoDataManifest
+        # Every key with a fetcher keeps it, whatever its declared level.
+        for key in keys(m.FETCHERS)
+            @test haskey(m.FETCHERS, key)
+            d = m.data_source(key)
+            # The rule dispatch uses, spelled the way `fetch_input` spells it.
+            fetcher = get(m.FETCHERS, key, nothing)
+            if isnothing(fetcher) && something(d.tier, :discretized) === :modelled
+                fetcher = get(m.MODELLERS, key, nothing)
+            end
+            @test !isnothing(fetcher)
+        end
+        # And the case that was broken specifically.
+        @test !isnothing(get(m.FETCHERS, :tides, nothing))
+        @test m.data_source(:tides).tier === :modelled
     end
 end

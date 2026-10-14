@@ -218,7 +218,7 @@ function fetch_woa23(;
         (p_lon, p_lat, p_dep) = dim_permutation(ga.dims, :lon, :lat, :depth)
         if map(s -> size(ga.data, s), (p_lon, p_lat, p_dep)) !=
            (length(lons), length(lats), length(deps_neg))
-            error("Variable $(repr(data_var)) is $(size(ga.data)) with dims " *
+            error("Variable $(repr(varname)) is $(size(ga.data)) with dims " *
                   "$([standardize_dimension_name(d.name) for d in ga.dims]), which does not " *
                   "match (lon=$(length(lons)), lat=$(length(lats)), depth=$(length(deps_neg))).")
         end
