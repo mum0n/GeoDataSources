@@ -57,7 +57,7 @@ end
 Resolve the Python interpreter used to run the Copernicus helper scripts and CLI.
 """
 function project_python()::String
-    for var in ("PARTICLETRACKING_PYTHON", "PYTHON_EXECUTABLE")
+    for var in ("GEOOCEANMODEL_PYTHON", "GEOLARVALTRACKING_PYTHON", "PARTICLETRACKING_PYTHON", "PYTHON_EXECUTABLE")
         override = get(ENV, var, "")
         isempty(strip(override)) || return normpath(override)
     end
@@ -163,11 +163,10 @@ end
 The `copernicusmarine` command, to which arguments are appended.
 
 A console script's launcher embeds the interpreter it was installed against. When the
-virtualenv moves -- which a package rename does, and this workspace has done -- the `.exe`
-still names the old `python.exe` and every call fails with "Unable to create process using
-'...ParticleTracking\\.venv\\Scripts\\python.exe' ...: The system cannot find the file
-specified". That message names neither the launcher nor the move, and it is reported by the
-fetcher as a download failure, which sends a reader looking for credentials instead.
+virtualenv moves, the `.exe` still references the previous `python.exe` path and every call
+fails with "Unable to create process ... The system cannot find the file specified".
+That message names neither the launcher nor the location shift, and may be mistakenly
+reported by the fetcher as a general download or credentials failure.
 
 So a script sitting beside the interpreter we already resolved is not run directly: the same
 entry point is invoked through that interpreter instead, which is the interpreter the script

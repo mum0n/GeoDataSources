@@ -158,8 +158,8 @@ function bin_points(
         i = bin_index(getproperty(p, :lon), lon0, dlon, n_lon)
         i === nothing && continue
         j = bin_index(getproperty(p, :lat), lat0, dlat, n_lat)
-        j === nothing && continue
-        k = clamp(searchsortedlast(time_bins, Float64(tv)), 1, n_t)
+        raw_k = searchsortedlast(time_bins, Float64(tv))
+        k = max(1, min(raw_k, n_t))
         sum[i, j, k] += Float64(v)
         cnt[i, j, k] += 1
     end

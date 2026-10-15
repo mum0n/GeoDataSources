@@ -33,11 +33,10 @@ region returns an empty box rather than an error, and the archive also contains 
 
 - the extracted file carries the velocity harmonics the readers open. TPXO9-Atlas carries
   them in **two forms** — amplitude/phase (`ua`, `up`, `va`, `vp`, in cm/s and degrees GMT)
-  and complex (`uRe`, `uIm`, `vRe`, `vIm`, in m s⁻¹) — and the two readers in
-  ParticleTracking disagree about which they want: `read_tidal_velocity_harmonics` opens
-  `ua`, the harmonic-synthesis path opens `uRe`. Either form satisfies this check, and the
-  returned field records which one was found, because a store carrying only one of them is
-  a real thing and naming it is what lets a caller decide;
+  and complex (`uRe`, `uIm`, `vRe`, `vIm`, in m s⁻¹) — and readers in
+  GeoOceanModel and GeoLarvalTracking accept either representation: `read_tidal_velocity_harmonics` opens
+  `ua`, while harmonic-synthesis paths open `uRe`. Either form satisfies this check, and the
+  returned field records which one was found, enabling downstream models to handle both;
 - its latitude and longitude axes actually span the requested domain.
 """
 function fetch_tpxo9_velocity(;
@@ -72,7 +71,8 @@ function fetch_tpxo9_velocity(;
     end
 
     try
-        r = ZipFile.Reader(open(archive))
+        io = open(archive)
+        r = ZipFile.Reader(io)
         try
             k = findfirst(f -> f.name == TPXO9_VELOCITY_MEMBER, r.files)
             k === nothing && error(
@@ -84,11 +84,17 @@ function fetch_tpxo9_velocity(;
                                "($(filesize(output_path)) bytes) in $(round(t, digits = 1))s")
         finally
             close(r)
+            close(io)
         end
     finally
         # The extracted file is what the caller asked for; the 4.7 GB it came from is not,
         # so it goes. A failure above must not leave it behind.
-        rm(archive; force = true)
+        GC.gc()
+        try
+            rm(archive; force = true)
+        catch e
+            verbose && @warn "Could not immediately remove temporary archive $(archive)" exception = e
+        end
     end
 
     return _validate_tpxo9_velocity(output_path; lon_range = lon_range,
@@ -106,11 +112,10 @@ covering the wrong region yields an empty box rather than an error. Naming the a
 coverage is the difference between a wrong run and a failed one.
 
 The velocity check accepts **either** harmonic form TPXO9-Atlas ships — amplitude/phase
-(`ua`, `up`, `va`, `vp`) or complex (`uRe`, `uIm`, `vRe`, `vIm`) — because they are the same
-information and the two readers in ParticleTracking disagree about which they open:
-`read_tidal_velocity_harmonics` requires `ua`, the harmonic-synthesis path requires `uRe`. A
-validator demanding one form would refuse a file the other reader reads happily, so the
-form found is reported instead.
+(`ua`, `up`, `va`, `vp`) or complex (`uRe`, `uIm`, `vRe`, `VIm`) — because they represent the same
+harmonic information, supported across GeoOceanModel and GeoLarvalTracking readers:
+`read_tidal_velocity_harmonics` reads `ua`, while harmonic-synthesis paths read `uRe`.
+Both harmonic formulations are valid and the form found is reported.
 """
 function _validate_tpxo9_velocity(path; lon_range = nothing, lat_range = nothing,
                                   verbose::Bool = true)

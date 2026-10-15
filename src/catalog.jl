@@ -62,7 +62,7 @@ using HTTP
     
     # Lakehouse tiering & lineage
     tier::Symbol = :raw                           # :raw (bronze), :processed (silver), :derived (gold)
-    producer::String = ""                         # Source project/org (e.g. "NOAA", "ParticleTracking.jl")
+    producer::String = ""                         # Source project/org (e.g. "NOAA", "GeoOceanModel.jl")
     derived_from::Vector{Symbol} = Symbol[]       # Upstream dataset keys in catalog used to build this
     checksum::String = ""                         # SHA-256 digest of stored artifact
     

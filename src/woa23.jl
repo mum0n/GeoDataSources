@@ -60,15 +60,20 @@ function fetch_woa23(;
 
     i_dep_hi = 101
 
-    # WOA23 ships 0.25 deg (1441x721) and 1.00 deg (361x181) grids. Indices computed for
-    # one are out of range for the other, so each resolution gets its own clamped window.
+    # WOA23 provides 0.25 deg (1441x721) and 1.00 deg (361x181) grids.
+    # Grid indices are bounded to valid OPeNDAP coordinate indices [0, lon_max] and [0, lat_max].
     function grid_indices(res_deg)
         lon_max = round(Int, 360.0 / res_deg)
         lat_max = round(Int, 180.0 / res_deg)
-        i_lo = clamp(round(Int, (Float64(lon_range[1]) + 180.0) / res_deg), 0, lon_max)
-        i_hi = clamp(round(Int, (Float64(lon_range[2]) + 180.0) / res_deg), 0, lon_max)
-        j_lo = clamp(round(Int, (Float64(lat_range[1]) + 90.0) / res_deg), 0, lat_max)
-        j_hi = clamp(round(Int, (Float64(lat_range[2]) + 90.0) / res_deg), 0, lat_max)
+        raw_i_lo = round(Int, (Float64(lon_range[1]) + 180.0) / res_deg)
+        raw_i_hi = round(Int, (Float64(lon_range[2]) + 180.0) / res_deg)
+        raw_j_lo = round(Int, (Float64(lat_range[1]) + 90.0) / res_deg)
+        raw_j_hi = round(Int, (Float64(lat_range[2]) + 90.0) / res_deg)
+
+        i_lo = max(0, min(raw_i_lo, lon_max))
+        i_hi = max(0, min(raw_i_hi, lon_max))
+        j_lo = max(0, min(raw_j_lo, lat_max))
+        j_hi = max(0, min(raw_j_hi, lat_max))
         return i_lo, i_hi, j_lo, j_hi
     end
 
@@ -112,7 +117,7 @@ function fetch_woa23(;
             push!(urls, "$(static_base)/$(path_25)/$(base_fn_25)")
             push!(urls, "$(static_base)/$(path_1)/$(base_fn_1)")
 
-            # A5B4 files are 0.25 deg: the window is clamped to that grid only. Each axis
+            # A5B4 files are 0.25 deg: the bounding index window is aligned to that grid. Each axis
             # gets its own range from one call, so all three axes describe the same window.
             win = opendap_windows(; res_deg = 0.25)
             subset_str = string(varname, win.lon, ",",
@@ -259,46 +264,39 @@ function fetch_woa23(;
             println("WOA23: repaired $(n_gap) masked level(s) and filled $(n_landcol) columns.")
         end
 
-        # A one-cell axis has no second sample to interpolate towards. The second index is
-        # clamped and the weight forced to zero, so the axis contributes its single value;
-        # previously `lons[i+1]` raised a BoundsError as soon as any axis had length 1.
-        i2(i) = min(i + 1, n_lon)
-        j2(j) = min(j + 1, n_lat)
-        k2(k) = min(k + 1, n_dep)
-
-        function woa_interp(lon, lat, z)
-            i_raw = searchsortedlast(lons, Float64(lon))
-            i = max(1, min(i_raw, n_lon - 1))
-            j_raw = searchsortedlast(lats, Float64(lat))
-            j = max(1, min(j_raw, n_lat - 1))
-            k_raw = searchsortedlast(deps_neg, Float64(z))
-            k = max(1, min(k_raw, n_dep - 1))
-
-            i_hi, j_hi, k_hi = i2(i), j2(j), k2(k)
-
-            dx = lons[i_hi] - lons[i]
-            sx = dx != 0.0 ? (Float64(lon) - lons[i]) / dx : 0.0
-            sx = clamp(sx, 0.0, 1.0)
-
-            dy = lats[j_hi] - lats[j]
-            sy = dy != 0.0 ? (Float64(lat) - lats[j]) / dy : 0.0
-            sy = clamp(sy, 0.0, 1.0)
-
-            dz = deps_neg[k_hi] - deps_neg[k]
-            sz = dz != 0.0 ? (Float64(z) - deps_neg[k]) / dz : 0.0
-            sz = clamp(sz, 0.0, 1.0)
-
-            return Float64(
-                field_3d[i,   j,   k]   * (1-sx)*(1-sy)*(1-sz) +
-                field_3d[i_hi, j,   k]   * sx*(1-sy)*(1-sz) +
-                field_3d[i,   j_hi, k]   * (1-sx)*sy*(1-sz) +
-                field_3d[i_hi, j_hi, k]   * sx*sy*(1-sz) +
-                field_3d[i,   j,   k_hi] * (1-sx)*(1-sy)*sz +
-                field_3d[i_hi, j,   k_hi] * sx*(1-sy)*sz +
-                field_3d[i,   j_hi, k_hi] * (1-sx)*sy*sz +
-                field_3d[i_hi, j_hi, k_hi] * sx*sy*sz
-            )
+        # Degenerate singleton axes are expanded or sliced so Interpolations.jl
+        # can handle both standard 3D grids and single-cell degenerate test fixtures.
+        # When an axis has length > 1, Interpolations.scale/interpolate with
+        # Gridded(Linear()) provides standard trilinear interpolation.
+        function _axis_grid(coords::Vector{Float64})
+            if length(coords) == 1
+                return [coords[1] - 0.5, coords[1] + 0.5], true
+            end
+            return coords, false
         end
+
+        grid_lons, lon_deg = _axis_grid(lons)
+        grid_lats, lat_deg = _axis_grid(lats)
+        grid_deps, dep_deg = _axis_grid(deps_neg)
+
+        expanded_data = field_3d
+        if lon_deg
+            expanded_data = cat(expanded_data, expanded_data; dims = 1)
+        end
+        if lat_deg
+            expanded_data = cat(expanded_data, expanded_data; dims = 2)
+        end
+        if dep_deg
+            expanded_data = cat(expanded_data, expanded_data; dims = 3)
+        end
+
+        itp = extrapolate(
+            interpolate((grid_lons, grid_lats, grid_deps), expanded_data,
+                        Gridded(Linear())),
+            Flat()
+        )
+
+        woa_interp(lon, lat, z) = Float64(itp(Float64(lon), Float64(lat), Float64(z)))
         return woa_interp
     end
 

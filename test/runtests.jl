@@ -518,7 +518,7 @@ include("helpers.jl")
                 raw = [scale * field(lon[i], lat[j], -dep[k])
                        for i in 1:6, j in 1:4, k in 1:5]
                 ds = if order === :lat_lon_depth
-                    make_3d_store(permutedims(raw, (2, 1, 3)), lat, lon, dep, varname;
+                    make_3d_store(permutedims(raw, (2, 1, 3)), lon, lat, dep, varname;
                                   order = (:lat, :lon, :depth))
                 else
                     make_3d_store(raw, lon, lat, dep, varname)
@@ -1008,7 +1008,7 @@ end
         @test occursin("<store>", raw)
         @test !occursin("<store>", resolved)
         @test normpath(resolved) == normpath(joinpath(GeoDataSources.store_root(),
-                                                     "modelled", "tpxo9"))
+                                                     "modelled", "tpxo9.nc"))
         # The per-run form still works for a source that names `<output_dir>`.
         woa = resolved_cache_path(:woa23, "outputs/run")
         @test !occursin("<", woa)
@@ -1074,8 +1074,8 @@ end
             @test occursin("covers latitude", msg)
             @test occursin("-71.0", msg)
 
-            # Either harmonic form is accepted: the two readers in ParticleTracking disagree
-            # about which they open and both carry the same information.
+            # Either harmonic form is accepted: readers in GeoOceanModel and GeoLarvalTracking
+            # support both formats and both carry the same harmonic information.
             for extra in (("ua", "up", "va", "vp"), ("URe", "UIm", "VRe", "VIm"))
                 pth = joinpath(dir, "form_$(first(extra)).zarr")
                 atlas(pth, full_lat, extra)
@@ -1253,7 +1253,6 @@ end
         @test GeoDataSources.resolved_cache_path(:atmosphere, ".") ==
               GeoDataSources.resolved_cache_path(:surface_winds, ".")
     end
-end
 
     @testset "A tier label never removes a fetcher from dispatch" begin
         # The regression this pins: `tier` was both the classification and the dispatch key,

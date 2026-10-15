@@ -2,7 +2,7 @@ name = "GeoDataSources"
 uuid = "5d0d5f0e-2b6c-4a7e-9f3d-1c8b7a6e5d4f"
 license = "MIT"
 version = "0.1.0"
-authors = ["ParticleTracking Contributors"]
+authors = ["Jae S. Choi"]
 description = "Dataset acquisition, provenance, and cataloguing for GeoData.jl: OceanData source fetchers, the manifest-based provenance registry, the medallion data catalog, and regional data-cube assimilation. Contains no dataset containers or backends of its own."
 
 [deps]
@@ -56,7 +56,7 @@ TOML = "1.0"
 TranscodingStreams = "0.11, 1.0"
 UUIDs = "1.0"
 YAXArrays = "0.7.8"
-Zarr = "0.10.2"
+Zarr = "0.10"
 ZipFile = "0.10.1"
 julia = "1.10"
 

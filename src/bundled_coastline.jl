@@ -12,7 +12,7 @@ run can still reject land; a run that needs a real shoreline fetches one through
 These rings are the region this project models, so the name says so. The general land test in
 `GeoData` takes whatever rings it is given and applies no default: deciding that a Scotian
 Shelf run should fall back to these rings is the regional application's decision, and the
-application layers (`GeoOceanModel`, `GeoLarvalTracking`, `ParticleTracking`) make it
+application layers (`GeoOceanModel`, `GeoLarvalTracking`) make it
 explicitly by passing them.
 """
 const SCOTIAN_SHELF_COASTLINE = [

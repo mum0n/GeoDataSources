@@ -678,13 +678,18 @@ function build_cube_hsi_evaluator(cube_path::AbstractString)
         elev = Float64.(read_storage_variable(storage, "elevation"))
 
         function sample(field, lon, lat, depth, month)
-            i = clamp(searchsortedfirst(lons, Float64(lon)), 1, max(1, length(lons) - 1))
-            j = clamp(searchsortedfirst(lats, Float64(lat)), 1, max(1, length(lats) - 1))
+            (lon < lons[1] || lon > lons[end] || lat < lats[1] || lat > lats[end]) &&
+                error("Coordinate ($(lon), $(lat)) is outside cube spatial extent [$(lons[1])..$(lons[end]), $(lats[1])..$(lats[end])].")
+            (month < 1 || month > size(field, 4)) &&
+                error("Month $(month) is outside valid range [1, $(size(field, 4))].")
+
+            i = searchsortedfirst(lons, Float64(lon))
+            i = min(max(1, i), length(lons) - 1)
+            j = searchsortedfirst(lats, Float64(lat))
+            j = min(max(1, j), length(lats) - 1)
             k = length(depths) > 1 ?
-                clamp(searchsortedfirst(depths, abs(Float64(depth))), 1, length(depths) - 1) : 1
-            m = clamp(Int(month), 1, size(field, 4))
-            # trilinear in the horizontal, nearest in depth: the cube's depth levels are
-            # standard levels, not an arbitrary grid.
+                min(max(1, searchsortedfirst(depths, abs(Float64(depth)))), length(depths) - 1) : 1
+            m = Int(month)
             return field[i, j, k, m]
         end
 
@@ -701,9 +706,11 @@ function build_cube_hsi_evaluator(cube_path::AbstractString)
             end
             s_z == 0.0 && return 0.0
 
-            # Below the sea floor is not habitat.
-            i = clamp(searchsortedfirst(lons, Float64(lon)), 1, max(1, length(lons) - 1))
-            j = clamp(searchsortedfirst(lats, Float64(lat)), 1, max(1, length(lats) - 1))
+            (lon < lons[1] || lon > lons[end] || lat < lats[1] || lat > lats[end]) &&
+                error("Coordinate ($(lon), $(lat)) is outside cube spatial extent.")
+
+            i = min(max(1, searchsortedfirst(lons, Float64(lon))), length(lons))
+            j = min(max(1, searchsortedfirst(lats, Float64(lat))), length(lats))
             z > -elev[i, j] && return 0.0
 
             tt = sample(temp, lon, lat, z, month)
@@ -712,10 +719,10 @@ function build_cube_hsi_evaluator(cube_path::AbstractString)
 
             # Thermal and oxygen tolerances of a Northwest Atlantic shelf species.
             s_t = tt < 0.0 ? 0.0 : (tt > 18.0 ? 0.0 : exp(-0.5 * ((tt - 8.0) / 5.0)^2))
-            s_o2 = o2 < 60.0 ? 0.0 : clamp(oo / 300.0, 0.0, 1.0)
+            s_o2 = oo < 60.0 ? 0.0 : min(1.0, max(0.0, oo / 300.0))
 
             hsi = s_z * s_t * s_o2
-            return clamp(hsi, 0.0, 1.0)
+            return min(1.0, max(0.0, hsi))
         end
     finally
         close_geostorage(storage)

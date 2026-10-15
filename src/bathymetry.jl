@@ -119,10 +119,11 @@ function etopo_bathymetry_field(;
 )
     _has_numerical_earth || error("NumericalEarth.jl required for ETOPO bathymetry regridding. Add NumericalEarth to your environment.")
     
-    lat_mid = 0.5 * (lat_range[1] + lat_range[2])
-    m_per_deg = 111_320.0 * cosd((lat_range[1] + lat_range[2]) / 2)
-    n_lon = clamp(round(Int, abs(lon_range[2] - lon_range[1]) * 111_320.0 * cosd((lat_range[1] + lat_range[2]) / 2) / resolution), 16, 21600)
-    n_lat = clamp(round(Int, abs(lat_range[2] - lat_range[1]) * 111_320.0 / resolution), 16, 10800)
+    resolution <= 0.0 && error("Resolution must be positive, got $(resolution) metres.")
+    raw_n_lon = round(Int, abs(lon_range[2] - lon_range[1]) * 111_320.0 * cosd(lat_mid) / resolution)
+    raw_n_lat = round(Int, abs(lat_range[2] - lat_range[1]) * 111_320.0 / resolution)
+    n_lon = max(16, min(raw_n_lon, 21600))
+    n_lat = max(16, min(raw_n_lat, 10800))
     
     scratch = NumericalEarth.LatitudeLongitudeGrid(
         NumericalEarth.CPU(), Float32;

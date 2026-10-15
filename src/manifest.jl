@@ -4,7 +4,7 @@
 Provenance registry for every physical input a run consumes.
 
 This module provides a generic data provenance framework that can be used by
-any project. ParticleTracking-specific data sources are also defined here.
+any project. GeoOceanModel- and GeoLarvalTracking-specific data sources are also defined here.
 """
 module GeoDataManifest
 
@@ -719,7 +719,7 @@ access requirements. This is the human-facing half of the reproducibility contra
 machine-facing half is `data_provenance.json`, written by a run.
 """
 function describe_data_sources(io::IO = stdout)
-    println(io, "Physical inputs required by GeoData/ParticleTracking\n")
+    println(io, "Physical inputs required by GeoOceanModel / GeoLarvalTracking\n")
     println(io, "="^78)
     for key in sort!(collect(keys(DATA_SOURCES)); by = string)
         d = DATA_SOURCES[key]
@@ -737,7 +737,7 @@ function describe_data_sources(io::IO = stdout)
     return nothing
 end
 
-# ParticleTracking-specific DATA_SOURCES
+# GeoOceanModel- and GeoLarvalTracking-specific DATA_SOURCES
 const DATA_SOURCES = Dict{Symbol, DataSource}(
 
     :bathymetry => DataSource(
@@ -794,7 +794,7 @@ const DATA_SOURCES = Dict{Symbol, DataSource}(
             "interannual and mesoscale structure. A hydrodynamic model needs the time " *
             "evolution, so GLORYS is the right choice for driving one; WOA23 is the right " *
             "choice for a climatological baseline and for bias-reference comparison. " *
-            "ParticleTracking already makes this call: GLORYS for `ocean_boundary_source` " *
+            "GeoOceanModel and GeoLarvalTracking configure this: GLORYS for `ocean_boundary_source` " *
             "because it carries currents, WOA23 for the initial condition.",
         ],
         "<store>/discretized/hydrography_temperature_<mm>.zarr",

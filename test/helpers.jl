@@ -75,13 +75,13 @@ function make_3d_store(data::AbstractArray{<:Real, 3}, lon, lat, dep, varname;
         u, vals, t = ax[name]
         Dimension(name = name, size = length(vals), coords = vals, units = u, dim_type = t)
     end
+    dims_dict = Dict{Symbol, Dimension}(d.name => d for d in dims)
     crs = CoordinateSystem(crs = "EPSG:4326")
-    dvars = Dict{Symbol, GeoArray}(:lon => GeoArray(ax[:lon][2], (dims[1],), crs, Dict()),
-                                   :lat => GeoArray(ax[:lat][2], (dims[2],), crs, Dict()),
-                                   :depth => GeoArray(ax[:depth][2], (dims[3],), crs, Dict()))
+    dvars = Dict{Symbol, GeoArray}(:lon => GeoArray(ax[:lon][2], (dims_dict[:lon],), crs, Dict()),
+                                   :lat => GeoArray(ax[:lat][2], (dims_dict[:lat],), crs, Dict()),
+                                   :depth => GeoArray(ax[:depth][2], (dims_dict[:depth],), crs, Dict()))
     GeoDataset(
         Dict(varname => GeoArray(Array{Float64}(data), dims, crs, Dict{String, Any}())),
-        dvars, Dict{Symbol, Dimension}(:lon => dims[1], :lat => dims[2],
-                                       :depth => dims[3]),
+        dvars, dims_dict,
         crs, Dict{String, Any}(), nothing, "woa-fixture")
 end
