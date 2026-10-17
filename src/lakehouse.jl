@@ -12,7 +12,7 @@ Standardizes storage directory hierarchy across:
 module LakehouseModule
 
 using GeoData.GeoDataTypes
-using GeoData: GeoDataset, GeoArray, CoordinateSystem, Dimension, geoload
+using GeoData: GeoDataset, GeoArray, CoordinateSystem, Dimension
 using ..CatalogModule: GeoDataCatalog, DatasetEntry, default_catalog_path,
     register_dataset!, save_catalog, geofetch
 # The lakehouse root is declared by the catalogue module, and one tier's layout must not own

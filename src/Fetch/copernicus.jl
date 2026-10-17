@@ -270,7 +270,8 @@ function fetch_copernicus_physics_subset(;
                    "--start-datetime", string(start_date, "T00:00:00"),
                    "--end-datetime", string(end_date, "T23:59:59"),
                    "--output-filename", basename(output_path),
-                   "--output-directory", dirname(output_path)])
+                   "--output-directory", dirname(output_path),
+                   "--overwrite"])
     cmd = Cmd(args)
 
     try

@@ -20,7 +20,13 @@
 # One directory for all assimilated inputs, shared across runs and halves:
 #   <store_root>/bathymetry, <store_root>/etopo, <store_root>/woa23,
 #   <store_root>/coastline, <store_root>/surface_winds, <store_root>/tpxo9, ...
-# Since this is GeoDataSources/, "../lakehouse/GeoData" is projects/lakehouse/GeoData.
+# If left empty, store_root delegates to the global GeoData.lakehouse_dir("GeoData").
+# Precedence:
+# 1. This file's [storage] store_root (if set)
+# 2. ENV["GEODATA_LAKEHOUSE"]
+# 3. LocalPreferences.toml [GeoData] lakehouse_dir
+# 4. ~/.geodata/storage.toml
+# 5. Proximity default: ../lakehouse/GeoData
 store_root = "../lakehouse/GeoData"
 
 # Verify a downloaded artefact's SHA-256 against the manifest. Turn off to skip the

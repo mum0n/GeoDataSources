@@ -51,8 +51,11 @@ workspace's `projects/lakehouse/GeoData`.
 """
 function store_root()::String
     cfg = storage_config()
-    root = haskey(cfg, "store_root") ? String(cfg["store_root"]) : "../lakehouse/GeoData"
-    return isabspath(root) ? root : abspath(dirname(@__DIR__), root)
+    if haskey(cfg, "store_root") && !isempty(String(cfg["store_root"]))
+        root = String(cfg["store_root"])
+        return isabspath(root) ? root : abspath(dirname(@__DIR__), root)
+    end
+    return GeoData.lakehouse_dir("GeoData")
 end
 
 """

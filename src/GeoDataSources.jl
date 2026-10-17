@@ -96,18 +96,16 @@ export
     store_path,
     storage_file_path,
     # coastline
-    fetch_natural_earth_coastline,
     # the bundled regional coastline rings. Exported so a caller that wants a regional
     # default passes it explicitly, rather than the generic layer defaulting to it.
     SCOTIAN_SHELF_COASTLINE,
     load_coastline_geodata,
     # bathymetry
-    fetch_erddap_bathymetry,
     load_bathymetry_geodata,
     save_bathymetry_geodata,
-regrid_bathymetry_from_etopo,
-etopo_bathymetry_field,
-bathymetry,
+    regrid_bathymetry_from_etopo,
+    etopo_bathymetry_field,
+    bathymetry,
     bathymetry_dataset,
     bathymetry_field,
     bathymetry_arrays,
@@ -116,7 +114,6 @@ bathymetry,
     BATHYMETRY_SOURCE_ALIASES,
     BATHYMETRY_COVERAGE,
     # winds
-    fetch_open_meteo_winds,
     load_wind_stress_geodata,
     build_bulk_surface_flux_geodata,
     wind_speed_to_kinematic_stress,
@@ -136,31 +133,23 @@ bathymetry,
     load_bottom_temperature_points,
     load_substrate_points,
     benthic_dataset,
-    fetch_bottom_temperature,
-    fetch_substrate_grainsize,
-    fetch_nwa_bathymetry,
-    fetch_tpxo9_velocity,
     # WOA23
-    fetch_woa23,
     load_woa23_interpolators,
     # boundary hydrography
     fetch_boundary_hydrography_geodata,
     build_boundary_tracer_interpolators_geodata,
     # regridding
-            slice_bathymetry_geodata,
+    slice_bathymetry_geodata,
     slice_wind_geodata,
     extract_grid_coordinates_geodata,
     # bathymetry processing
-            sample_marine_cells,
+    sample_marine_cells,
     # geospatial utilities
-            # Copernicus
+    # Copernicus
     copernicusmarine_executable,
     project_python,
     copernicus_credentials,
     copernicus_login_reminder,
-    fetch_copernicus_physics_subset,
-    fetch_copernicus_hydrography_with_fallback,
-    fetch_copernicus_surface_winds,
     # manifest / provenance
     DATA_SOURCES,
     DataSource,
@@ -211,5 +200,45 @@ bathymetry,
     compute_lakehouse_checksum,
     geopublish_dataset!,
     geofetch_dataset
+
+function __init__()
+    # Register GeoDataSources as acquisition driver plugins for GeoData.geoget
+    GeoData.register_source_provider!(:erddap, (uri; cache_dir=nothing, bounds=nothing, kwargs...) -> begin
+        lon_range = bounds !== nothing ? bounds[1] : (-71.0, -53.0)
+        lat_range = bounds !== nothing ? bounds[2] : (40.0, 48.5)
+        out_path = cache_dir !== nothing ? joinpath(cache_dir, "bathymetry.zarr") : joinpath("inputs", "bathymetry.zarr")
+        fetch_erddap_bathymetry(; lon_range=lon_range, lat_range=lat_range, output_path=out_path, kwargs...)
+    end)
+
+    GeoData.register_source_provider!(:copernicus, (uri; cache_dir=nothing, bounds=nothing, kwargs...) -> begin
+        fetch_copernicus_physics_subset(; kwargs...)
+    end)
+
+    GeoData.register_source_provider!(:open_meteo, (uri; cache_dir=nothing, bounds=nothing, kwargs...) -> begin
+        lon_range = bounds !== nothing ? bounds[1] : (-71.0, -53.0)
+        lat_range = bounds !== nothing ? bounds[2] : (40.0, 48.5)
+        out_path = cache_dir !== nothing ? joinpath(cache_dir, "surface_winds.zarr") : joinpath("inputs", "surface_winds.zarr")
+        fetch_open_meteo_winds(; lon_range=lon_range, lat_range=lat_range, output_path=out_path, kwargs...)
+    end)
+
+    GeoData.register_source_provider!(:woa23, (uri; cache_dir=nothing, bounds=nothing, kwargs...) -> begin
+        lon_range = bounds !== nothing ? bounds[1] : (-71.0, -53.0)
+        lat_range = bounds !== nothing ? bounds[2] : (40.0, 48.5)
+        out_dir = cache_dir !== nothing ? cache_dir : store_path("woa23")
+        fetch_woa23(; lon_range=lon_range, lat_range=lat_range, output_dir=out_dir, kwargs...)
+    end)
+
+    GeoData.register_source_provider!(:tides, (uri; cache_dir=nothing, bounds=nothing, kwargs...) -> begin
+        out_dir = cache_dir !== nothing ? cache_dir : "inputs"
+        fetch_input(:tides, out_dir; kwargs...)
+    end)
+
+    GeoData.register_source_provider!(:natural_earth, (uri; cache_dir=nothing, bounds=nothing, kwargs...) -> begin
+        lon_range = bounds !== nothing ? bounds[1] : (-71.0, -53.0)
+        lat_range = bounds !== nothing ? bounds[2] : (40.0, 48.5)
+        out_path = cache_dir !== nothing ? joinpath(cache_dir, "coastline.dat") : joinpath("inputs", "coastline.dat")
+        fetch_natural_earth_coastline(; lon_range=lon_range, lat_range=lat_range, output_path=out_path, kwargs...)
+    end)
+end
 
 end # module GeoDataSources

@@ -233,13 +233,14 @@ function build_boundary_tracer_interpolators_geodata(
         p = sortperm(deps); deps = deps[p]; T_data = T_data[:, :, p]; S_data = S_data[:, :, p]
     end
 
-    # Extrapolate downward to fill below-seabed bathymetric NaNs with the deepest
-    # valid bottom marine water value at each (lon, lat) column.
+    # Extrapolate downward from surface to seabed to fill below-seabed bathymetric
+    # NaNs with the deepest valid bottom marine water value at each (lon, lat) column.
+    # Note: `deps` is sorted ascending in signed z (e.g., -5700 m at k=1 to 0 m at k=end),
+    # so downward through the water column corresponds to descending index k.
     for j in 1:size(T_data, 2), i in 1:size(T_data, 1)
-        # Forward pass down the water column
         last_valid_T = NaN
         last_valid_S = NaN
-        for k in 1:length(deps)
+        for k in length(deps):-1:1
             if !isnan(T_data[i, j, k])
                 last_valid_T = T_data[i, j, k]
             elseif !isnan(last_valid_T)
