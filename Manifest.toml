@@ -2,7 +2,7 @@
 
 julia_version = "1.13.2"
 manifest_format = "2.1"
-project_hash = "2abade8e22823bd4862238ca44a5efc7c78edc1d"
+project_hash = "06de55439aec75c51f4e7e37d48003d9faa54df5"
 
 [[deps.ADTypes]]
 deps = ["PrecompileTools"]
@@ -865,13 +865,13 @@ uuid = "a0844989-3bd2-4988-8bea-c9407ab0941b"
 version = "1.2.0"
 
 [[deps.GeoData]]
-deps = ["ArchGDAL", "Base64", "CFTime", "CodecZlib", "DataFrames", "Dates", "Downloads", "GeoFormatTypes", "GeoInterface", "GeoJSON", "GeoParquet", "HTTP", "Interpolations", "JSON3", "LinearAlgebra", "NCDatasets", "Random", "Reexport", "SHA", "SparseArrays", "Statistics", "TOML", "TranscodingStreams", "UUIDs", "WellKnownGeometry", "YAXArrays", "Zarr"]
+deps = ["ArchGDAL", "Base64", "CFTime", "CodecZlib", "DataFrames", "Dates", "Downloads", "GeoFormatTypes", "GeoInterface", "GeoJSON", "GeoParquet", "HTTP", "Interpolations", "JSON3", "LinearAlgebra", "NCDatasets", "Random", "Reexport", "SHA", "Serialization", "SparseArrays", "Statistics", "TOML", "TranscodingStreams", "UUIDs", "WellKnownGeometry", "YAXArrays", "ZMQ", "Zarr"]
 path = "../GeoData"
 uuid = "9b6fcbb8-86d6-11e9-1ce7-23a6bb139a78"
 version = "0.1.0"
 
 [[deps.GeoDataSources]]
-deps = ["Base64", "CodecZlib", "DataFrames", "Dates", "Downloads", "GeoData", "GeoInterface", "GeoParquet", "HTTP", "Interpolations", "JSON3", "LinearAlgebra", "NCDatasets", "RData", "Random", "Reexport", "SHA", "Statistics", "TOML", "TranscodingStreams", "UUIDs", "YAXArrays", "Zarr", "ZipFile"]
+deps = ["Base64", "CodecZlib", "DataFrames", "Dates", "Downloads", "GeoData", "GeoInterface", "GeoParquet", "HTTP", "Interpolations", "JSON3", "LinearAlgebra", "NCDatasets", "RData", "Random", "Reexport", "SHA", "Serialization", "Statistics", "TOML", "TranscodingStreams", "UUIDs", "YAXArrays", "ZMQ", "Zarr", "ZipFile"]
 path = "."
 uuid = "5d0d5f0e-2b6c-4a7e-9f3d-1c8b7a6e5d4f"
 version = "0.1.0"
@@ -2583,6 +2583,13 @@ registries = "General"
 uuid = "c21b50f5-aa40-41ea-b809-c0f5e47bfa5c"
 version = "0.7.8"
 
+[[deps.ZMQ]]
+deps = ["FileWatching", "PrecompileTools", "Printf", "Sockets", "ZeroMQ_jll"]
+git-tree-sha1 = "5f1c7008e2258c61af0eafef8c1f536b9fffbbd2"
+registries = "General"
+uuid = "c2297ded-f4af-51ae-bb23-16f91089e4e1"
+version = "1.5.1"
+
 [[deps.Zarr]]
 deps = ["Blosc", "CRC32c", "ChunkCodecCore", "ChunkCodecLibZlib", "ChunkCodecLibZstd", "DataStructures", "DateTimes64", "Dates", "DiskArrays", "HTTP", "JSON", "OffsetArrays", "OrderedCollections", "Pkg", "URIs", "Unicode", "ZipArchives"]
 git-tree-sha1 = "d448244b07ecfc658d8153c4d50ffd5961c6d4a6"
@@ -2595,6 +2602,13 @@ version = "0.10.2"
 
     [deps.Zarr.weakdeps]
     AWSS3 = "1c724243-ef5b-51ab-93f4-b0a88ac62a95"
+
+[[deps.ZeroMQ_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "libsodium_jll"]
+git-tree-sha1 = "766d90db2817565b667c1cc9cc420d668f2e8dba"
+registries = "General"
+uuid = "8f1865be-045e-5c20-9c9f-bfbfb0764568"
+version = "4.3.6+0"
 
 [[deps.ZipArchives]]
 deps = ["ArgCheck", "CodecInflate64", "CodecZlib", "InputBuffers", "PrecompileTools", "TranscodingStreams", "Zlib_jll"]
@@ -2736,6 +2750,13 @@ git-tree-sha1 = "1fcd6cf05d23adab0b5ffc496d020537215751dc"
 registries = "General"
 uuid = "b53b4c65-9356-5827-b1ea-8c7a1a84506f"
 version = "1.6.59+1"
+
+[[deps.libsodium_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "011b0a7331b41c25524b64dc42afc9683ee89026"
+registries = "General"
+uuid = "a9144af2-ca23-56d9-984f-0d03f7b5ccf8"
+version = "1.0.21+0"
 
 [[deps.libwebp_jll]]
 deps = ["Artifacts", "Giflib_jll", "JLLWrappers", "JpegTurbo_jll", "Libdl", "Libglvnd_jll", "Libtiff_jll", "libpng_jll"]
