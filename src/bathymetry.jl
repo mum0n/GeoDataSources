@@ -484,17 +484,43 @@ function _check_bathymetry_tier(source::Symbol, tier)
 end
 
 """
-    bathymetry_dataset(; source = nothing, lon_range, lat_range, tier = nothing,
-                       output_path = nothing, force = false,
-                       verbose = true) -> GeoDataset
+    bathymetry_artefact(source::Symbol) -> String
+
+The file name a bathymetry source is written under: `bathymetry_etopo.nc` for the
+modelled global surface, which is a NetCDF file, and `bathymetry_nwa.zarr` for the
+measured sounding record, which is a Zarr group.
+
+The name carries the format because the two sources write different kinds of artefact and
+one path cannot hold both. A NetCDF file written where a Zarr group is expected is read
+back as a directory and fails with a permission error; a Zarr group written where a file
+is expected fails the same way. Naming the two sources apart is what stops one run's
+product from becoming the next run's "file already exists".
+"""
+function bathymetry_artefact(source::Symbol)
+    source === :nwa && return "bathymetry_nwa.zarr"
+    source === :etopo && return "bathymetry_etopo.nc"
+    declared = join(sort!(collect(keys(BATHYMETRY_SOURCES)); by = string), ", ")
+    error("No bathymetry artefact is defined for source $(source). " *
+          "Declared sources: $(declared).")
+end
+
+"""
+    bathymetry_dataset(; source = nothing,
+                       lon_range::Tuple{Real, Real},
+                       lat_range::Tuple{Real, Real},
+                       tier = nothing,
+                       output_path::Union{Nothing, AbstractString} = nothing,
+                       force::Bool = false,
+                       verbose::Bool = true,
+                       kwargs...) -> GeoDataset
 
 Bathymetry for a domain as a `GeoDataset`, by named source and range, with an optional
 durable artefact.
 
 This is the run-path counterpart to `bathymetry`: the single place that answers "which
 product, at which tier, obtained how", so a caller names a source and a range and learns
-nothing about formats or files. The difference is `output_path`, which makes the resolution
-durable and shared:
+nothing about formats or files. `output_path` is what makes the resolution durable and
+shared:
 
 - when given and already cached, that artefact is loaded and no product is re-fetched, so
   every reader in a run sees the *same* sea floor;
@@ -507,11 +533,18 @@ source is obtained at, and `force` re-fetches past a cache.
 
 `verbose` is a print switch only: it never decides what is fetched.
 
+`output_path` may name a directory, in which case the source's artefact goes inside it
+under its canonical name (`bathymetry_artefact`), or a file path, which is used as given.
+A directory is the usual case for a run: the run's inputs directory holds the products
+this run read, each named for what it is. Without it the product is written under
+`inputs/` in the working directory, which is a scratch location and not a durable home --
+a caller that wants the product to outlive the process must name where it goes.
+
 # Example
 ```julia
 ds = bathymetry_dataset(; source = "scotian_shelf", lon_range = (-68.0, -57.0),
                         lat_range = (42.0, 47.5),
-                        output_path = "inputs/bathymetry_active.nc")
+                        output_path = "inputs")
 ```
 """
 function bathymetry_dataset(; source = nothing,
@@ -526,23 +559,35 @@ function bathymetry_dataset(; source = nothing,
                                            lat_range = lat_range)
     _check_bathymetry_tier(resolved, tier)
 
+    # Where the product goes. A directory holds the source's canonical artefact; a file
+    # path is the caller's own and is used as given. The two sources write different
+    # kinds of artefact -- a NetCDF file and a Zarr group -- so they are never given the
+    # same path: a product written by one source must not be the path the other source
+    # writes to, which is how a run ends up failing on a store that is already there.
+    destination = if output_path === nothing
+        joinpath("inputs", bathymetry_artefact(resolved))
+    elseif isdir(output_path) || isempty(splitext(output_path)[2])
+        mkpath(output_path)
+        joinpath(output_path, bathymetry_artefact(resolved))
+    else
+        String(output_path)
+    end
+
     # One artefact per (source, range, output_path). The cache is keyed by path, so a run
     # that changed its source must not read the previous product's file back as if it were
     # this one's: `force` is the escape, and a stale source is reported rather than used.
-    if output_path !== nothing && !force && is_cached(output_path)
-        verbose && println("Using existing bathymetry store: $(output_path) " *
+    # The default destination carries no range, so it is never read back: it is written,
+    # not trusted.
+    if output_path !== nothing && !force && is_cached(destination)
+        verbose && println("Using existing bathymetry store: $(destination) " *
                            "(source $(resolved))")
-        return geoload(output_path)
+        return geoload(destination)
     end
 
     # The fetchers all require a real path, because they all download to a file before they
     # can read it. `output_path = nothing` asks for no durable artefact, so it is resolved to
     # a scratch destination here rather than passed down as `nothing` -- which every one of
     # them rejects with a TypeError, so the documented "nothing" path could never have run.
-    destination = something(output_path, joinpath("inputs", "bathymetry.zarr"))
-    # A fetcher writes to a path the caller named, which may not exist yet. `NCDataset` reports
-    # a missing parent directory as "Permission denied" on Windows, which sends a reader
-    # hunting for a file lock that is not there. Create it here, so the failure is a real one.
     mkpath(dirname(destination))
 
     ds = if resolved === :etopo
@@ -551,7 +596,10 @@ function bathymetry_dataset(; source = nothing,
         # `destination`). Either way the run's cached sea floor ends up at `destination`.
         d = _etopo_from_store_tile(; lon_range = lon_range, lat_range = lat_range, verbose = verbose)
         if d !== nothing
-            geosave(destination, d; backend = :ncdatasets, overwrite = true)
+            # The format follows the name, as it does everywhere else: `geosave` infers the
+            # backend from the extension. Forcing NetCDF here wrote a NetCDF *file* to a
+            # destination named `.zarr`, which the next reader opens as a directory.
+            geosave(destination, d; overwrite = true)
             d
         else
             verbose && println("ETOPO: downloading via ERDDAP (store has no covering tile)...")
@@ -568,9 +616,9 @@ function bathymetry_dataset(; source = nothing,
               "Declared sources: $(declared).")
     end
 
-    if output_path !== nothing && !is_cached(output_path)
+    if output_path !== nothing && !is_cached(destination)
         error("Bathymetry source $(resolved) was resolved for " *
-              "($(lon_range), $(lat_range)) but nothing was written to $(output_path). " *
+              "($(lon_range), $(lat_range)) but nothing was written to $(destination). " *
               "The run cannot report a sea floor it does not have.")
     end
     return ds

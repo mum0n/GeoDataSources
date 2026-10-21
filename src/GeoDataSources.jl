@@ -109,6 +109,7 @@ export
     bathymetry_dataset,
     bathymetry_field,
     bathymetry_arrays,
+    bathymetry_artefact,
     preferred_bathymetry_source,
     BATHYMETRY_SOURCES,
     BATHYMETRY_SOURCE_ALIASES,
