@@ -190,6 +190,12 @@ end
 
 Download a regional subset of 3D temperature (`thetao`) and salinity (`so`) from a
 Copernicus Marine global ocean physics product using the `copernicusmarine` CLI.
+
+With `with_velocities = true` the zonal (`uo`) and meridional (`vo`) velocity are
+fetched as well. They are not requested by default: a boundary that is to be relaxed
+toward a prescribed *velocity* needs them, and a boundary that is only to carry water
+of a given temperature and salinity does not, and the subset is four times the size
+with them.
 """
 function fetch_copernicus_physics_subset(;
     lon_range::Union{Nothing, Tuple{Real, Real}} = nothing,
@@ -201,12 +207,13 @@ function fetch_copernicus_physics_subset(;
     service_url::Union{Nothing, AbstractString} = nothing,
     verbose::Bool = true,
     # Part of the package's canonical fetcher keyword set. This fetcher always
-    # re-downloads, so there is no store for orce to invalidate; it is accepted (and
+    # re-downloads, so there is no store for orce to invalidate; it is accepted (and
     # has no effect) rather than absent, which is what previously made
     # _fetcher_copernicus_physics forward a keyword no method accepted and fail on every
     # live fetch.
     force::Bool = false,
     backend::Symbol = :zarr,
+    with_velocities::Bool = false,
 )
     # Default domain if not provided
     lon_range = isnothing(lon_range) ? (-71.0, -53.0) : lon_range
@@ -262,8 +269,12 @@ function fetch_copernicus_physics_subset(;
     append!(args, auth.exec)
     append!(args, ["--dataset-id", dataset,
                    "--variable", "thetao",
-                   "--variable", "so",
-                   "--minimum-longitude", string(min_lon),
+                   "--variable", "so"])
+    # The velocities are a separate request in the same subset command, not a separate
+    # download: the CLI takes the variable list for one bounding box and one date range,
+    # and asking for them in the same call is what keeps the four fields on one grid.
+    with_velocities && append!(args, ["--variable", "uo", "--variable", "vo"])
+    append!(args, ["--minimum-longitude", string(min_lon),
                    "--maximum-longitude", string(max_lon),
                    "--minimum-latitude", string(min_lat),
                    "--maximum-latitude", string(max_lat),

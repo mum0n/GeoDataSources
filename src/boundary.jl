@@ -70,7 +70,7 @@ end
 """
     fetch_boundary_hydrography_geodata(source::Symbol;
         lon_range, lat_range, input_dir,
-        month = 0, verbose = true) -> NamedTuple
+        month = 0, verbose = true, with_velocities = false) -> NamedTuple
 
 Acquire and load boundary temperature and salinity as sponge targets using GeoData.
 
@@ -81,13 +81,15 @@ Acquire and load boundary temperature and salinity as sponge targets using GeoDa
 - `input_dir`: Input/output directory
 - `month`: Month (0 = annual mean)
 - `verbose`: Print progress messages
+- `with_velocities`: Also return `u` and `v` interpolators (GLORYS only)
 
 # Returns
-NamedTuple with interpolator functions (T, S).
+NamedTuple with interpolator functions (T, S), and with `u` and `v` as well when
+`with_velocities` is set.
 """
 function fetch_boundary_hydrography_geodata(source::Symbol;
     lon_range, lat_range, input_dir,
-    month::Int = 0, verbose::Bool = true)
+    month::Int = 0, verbose::Bool = true, with_velocities::Bool = false)
     mkpath(input_dir)
     lon = (Float64(lon_range[1]), Float64(lon_range[2]))
     lat = (Float64(lat_range[1]), Float64(lat_range[2]))
@@ -112,17 +114,28 @@ function fetch_boundary_hydrography_geodata(source::Symbol;
     end
 
     if source in (:glorys12v1, :glorys_climatology)
-        p = joinpath(input_dir, "boundary_glorys_1993_$(lon[1])_$(lon[2])_$(lat[1])_$(lat[2]).zarr")
+        # The velocity-bearing subset is a DIFFERENT FILE from the temperature-and-salinity
+        # one, not an extra variable in it. The reason is that the existing cache is
+        # already on disk with two variables in it, and a cache that is checked for the
+        # variables it holds would have to be re-fetched and re-written to gain two more.
+        # A second path costs one download of overlapping data and leaves every existing
+        # cache valid.
+        suffix = with_velocities ? "_uv" : ""
+        p = joinpath(input_dir, "boundary_glorys_1993_$(lon[1])_$(lon[2])_$(lat[1])_$(lat[2])$(suffix).zarr")
         if !isdir(p) && !isfile(p)
             nc = replace(p, ".zarr" => ".nc")
-            nc = isfile(nc) ? nc : _central_glorys_subset(lon, lat)
+            # The central store holds a temperature-and-salinity subset. It has no
+            # velocities, so a boundary that needs them is fetched from Copernicus
+            # rather than silently served a subset that cannot answer the question.
+            nc = isfile(nc) ? nc : (with_velocities ? nothing : _central_glorys_subset(lon, lat))
             if nc === nothing
                 verbose && println("Fetching GLORYS12V1 boundary subset (Copernicus Marine)...")
                 Copernicus.fetch_copernicus_physics_subset(
                     lon_range = lon_range, lat_range = lat_range,
                     start_date = "1993-01-01", end_date = "1993-12-31",
                     output_path = replace(p, ".zarr" => ".nc"),
-                    dataset_id = "cmems_mod_glo_phy_my_0.083deg_P1M-m"
+                    dataset_id = "cmems_mod_glo_phy_my_0.083deg_P1M-m",
+                    with_velocities = with_velocities
                 )
                 nc = replace(p, ".zarr" => ".nc")
             else
@@ -138,8 +151,12 @@ function fetch_boundary_hydrography_geodata(source::Symbol;
             geosave(p, ds; backend = :zarr)
         end
         m = month == 0 ? collect(1:12) : [max(1, min(12, month))]
-        return build_boundary_tracer_interpolators_geodata(p, p; T_name = "thetao", S_name = "so",
-                                                            months = m)
+        tracers = build_boundary_tracer_interpolators_geodata(p, p; T_name = "thetao", S_name = "so",
+                                                              months = m)
+        with_velocities || return tracers
+        velocities = build_boundary_velocity_interpolators_geodata(p; u_name = "uo", v_name = "vo",
+                                                                  months = m)
+        return merge(tracers, velocities)
     end
 
     if source === :hycom
@@ -158,6 +175,111 @@ function fetch_boundary_hydrography_geodata(source::Symbol;
     error(
         "Unknown boundary source \"$(source)\". Choose :woa23, :glorys12v1, :hycom, or :synthetic."
     )
+end
+
+"""
+    _boundary_axes(ds) -> (lons, lats, deps)
+
+The coordinate vectors of a boundary dataset, with depth in the model's convention:
+negative down, in metres.
+
+Depth is normalised here rather than at each use because the two boundary products
+disagree about it: WOA23 stores depth positive down, GLORYS stores it positive up, and
+an interpolator built on the wrong sign of `z` is not a wrong answer, it is an answer
+about the wrong place.
+"""
+function _boundary_axes(ds)
+    lons, _ = axis(ds, :lon)
+    lats, _ = axis(ds, :lat)
+    deps, _ = axis(ds, :depth)
+    if !isempty(deps) && minimum(deps) > -0.5 * maximum(abs, deps)
+        deps = -deps
+    end
+    return lons, lats, deps
+end
+
+"""
+    _boundary_variable_data(ds, name, months) -> Array
+
+One variable of a boundary dataset as a 3-D (lon, lat, depth) array, with the time axis
+resolved to the requested months.
+"""
+function _boundary_variable_data(ds, name::AbstractString, months::Vector{Int})
+    data = ds.variables[name].data
+    if ndims(data) == 4 && length(months) > 1
+        data = mean(data[:, :, :, months], dims = 4)[:, :, :, 1]
+    elseif ndims(data) == 4
+        data = data[:, :, :, months[1]]
+    end
+    lons, _ = axis(ds, :lon)
+    lats, _ = axis(ds, :lat)
+    if size(data, 1) == length(lats) && size(data, 2) == length(lons)
+        data = permutedims(data, (2, 1, 3))
+    end
+    return data
+end
+
+"""
+    _boundary_permutations(lons, lats, deps) -> (plon, plat, pdep)
+
+The permutations that bring the coordinate vectors into ascending order.
+
+They are computed once and applied to every variable, because a temperature sorted one
+way and a velocity sorted another are two different fields on two different grids
+wearing the same axes.
+"""
+function _boundary_permutations(lons, lats, deps)
+    plon = issorted(lons) ? collect(eachindex(lons)) : sortperm(lons)
+    plat = issorted(lats) ? collect(eachindex(lats)) : sortperm(lats)
+    pdep = issorted(deps) ? collect(eachindex(deps)) : sortperm(deps)
+    return plon, plat, pdep
+end
+
+"""
+    _apply_boundary_permutation(data, plon, plat, pdep) -> data
+"""
+function _apply_boundary_permutation(data, plon, plat, pdep)
+    return data[plon, :, :][:, plat, :][:, :, pdep]
+end
+
+"""
+    _fill_boundary_nans!(data, deps) -> data
+
+Fill NaNs downward through the water column with the deepest valid value above them.
+
+The fill is downward because the boundary data is a reanalysis whose levels stop at the
+sea floor: below the deepest wet level of a column there is no value, and the water
+there is the water above it.
+"""
+function _fill_boundary_nans!(data, deps)
+    for j in 1:size(data, 2), i in 1:size(data, 1)
+        last_valid = NaN
+        for k in length(deps):-1:1
+            if !isnan(data[i, j, k])
+                last_valid = data[i, j, k]
+            elseif !isnan(last_valid)
+                data[i, j, k] = last_valid
+            end
+        end
+    end
+    return data
+end
+
+"""
+    _replace_boundary_nans!(data, default) -> data
+"""
+function _replace_boundary_nans!(data, default::Real)
+    replace!(data, NaN => Float64(default))
+    return data
+end
+
+"""
+    _boundary_interpolator(lons, lats, deps, data) -> (lon, lat, z, t) -> value
+"""
+function _boundary_interpolator(lons, lats, deps, data)
+    itp = interpolate((lons, lats, deps), data, Gridded(Linear()))
+    itp_ext = extrapolate(itp, Flat())
+    return (lon, lat, z, t = 0.0) -> Float64(itp_ext(Float64(lon), Float64(lat), Float64(z)))
 end
 
 """
@@ -189,90 +311,83 @@ function build_boundary_tracer_interpolators_geodata(
     # `minimum(deps)` fail on a tuple of (Vector, Dimension) the first time this path ran.
     # `axis` names what is missing rather than silently handing back nothing, and it resolves
     # aliases, so `t` or `datetime` is found too.
-    lons, _ = axis(temp_ds, :lon)
-    lats, _ = axis(temp_ds, :lat)
-    deps, _ = axis(temp_ds, :depth)
-      # Time is optional: a static source legitimately has no time axis. The presence test
-      # goes through the same alias table `axis` uses, so a file that spells the axis `t`
-      # does not read as "no time axis" and silently fall back to a single frame.
-      times = any(k -> standardize_dimension_name(k) === :time,
-                  keys(temp_ds.coords)) ? first(axis(temp_ds, :time)) : Float64[0.0]
+    lons, lats, deps = _boundary_axes(temp_ds)
+
+    # Time is optional: a static source legitimately has no time axis. The presence test
+    # goes through the same alias table `axis` uses, so a file that spells the axis `t`
+    # does not read as "no time axis" and silently fall back to a single frame.
+    times = any(k -> standardize_dimension_name(k) === :time,
+                keys(temp_ds.coords)) ? first(axis(temp_ds, :time)) : Float64[0.0]
 
     # Get data arrays
-    T_data = temp_ds.variables[T_name].data
-    S_data = salt_ds.variables[S_name].data
+    T_data = _boundary_variable_data(temp_ds, T_name, months)
+    S_data = _boundary_variable_data(salt_ds, S_name, months)
 
-    # Handle time dimension - average over specified months if multiple
-    if ndims(T_data) == 4 && length(months) > 1
-        T_data = mean(T_data[:, :, :, months], dims=4)[:, :, :, 1]
-        S_data = mean(S_data[:, :, :, months], dims=4)[:, :, :, 1]
-    elseif ndims(T_data) == 4
-        T_data = T_data[:, :, :, months[1]]
-        S_data = S_data[:, :, :, months[1]]
-    end
+    # Sort coordinates, once, and apply the same permutation to every variable.
+    plon, plat, pdep = _boundary_permutations(lons, lats, deps)
+    lons, lats, deps = lons[plon], lats[plat], deps[pdep]
+    T_data = _apply_boundary_permutation(T_data, plon, plat, pdep)
+    S_data = _apply_boundary_permutation(S_data, plon, plat, pdep)
 
-    # Ensure (lon, lat, depth) ordering
-    if size(T_data, 1) == length(lats) && size(T_data, 2) == length(lons)
-        T_data = permutedims(T_data, (2, 1, 3))
-        S_data = permutedims(S_data, (2, 1, 3))
-    end
+    # Fill downward from the deepest valid value, then replace what is left with the
+    # domain average: a fully dry land column has no water in it at all, and the sponge
+    # should not be asked about it.
+    _fill_boundary_nans!(T_data, deps)
+    _fill_boundary_nans!(S_data, deps)
 
-    # Convert depth to negative-up if positive-down
-    if !isempty(deps) && minimum(deps) > -0.5 * maximum(abs, deps)
-        deps = -deps
-    end
-
-    # Sort coordinates
-    if !issorted(lons)
-        p = sortperm(lons); lons = lons[p]; T_data = T_data[p, :, :]; S_data = S_data[p, :, :]
-    end
-    if !issorted(lats)
-        p = sortperm(lats); lats = lats[p]; T_data = T_data[:, p, :]; S_data = S_data[:, p, :]
-    end
-    if !issorted(deps)
-        p = sortperm(deps); deps = deps[p]; T_data = T_data[:, :, p]; S_data = S_data[:, :, p]
-    end
-
-    # Extrapolate downward from surface to seabed to fill below-seabed bathymetric
-    # NaNs with the deepest valid bottom marine water value at each (lon, lat) column.
-    # Note: `deps` is sorted ascending in signed z (e.g., -5700 m at k=1 to 0 m at k=end),
-    # so downward through the water column corresponds to descending index k.
-    for j in 1:size(T_data, 2), i in 1:size(T_data, 1)
-        last_valid_T = NaN
-        last_valid_S = NaN
-        for k in length(deps):-1:1
-            if !isnan(T_data[i, j, k])
-                last_valid_T = T_data[i, j, k]
-            elseif !isnan(last_valid_T)
-                T_data[i, j, k] = last_valid_T
-            end
-
-            if !isnan(S_data[i, j, k])
-                last_valid_S = S_data[i, j, k]
-            elseif !isnan(last_valid_S)
-                S_data[i, j, k] = last_valid_S
-            end
-        end
-    end
-
-    # Replace any remaining fully-dry land column NaNs with domain-average ocean values
     valid_T_all = filter(!isnan, T_data)
     valid_S_all = filter(!isnan, S_data)
     default_T = isempty(valid_T_all) ? 10.0 : mean(valid_T_all)
     default_S = isempty(valid_S_all) ? 35.0 : mean(valid_S_all)
-    replace!(T_data, NaN => default_T)
-    replace!(S_data, NaN => default_S)
+    _replace_boundary_nans!(T_data, default_T)
+    _replace_boundary_nans!(S_data, default_S)
 
     # Create 3D interpolators (lon, lat, depth)
-    itp_T = interpolate((lons, lats, deps), T_data, Gridded(Linear()))
-    itp_T_ext = extrapolate(itp_T, Flat())
-    itp_S = interpolate((lons, lats, deps), S_data, Gridded(Linear()))
-    itp_S_ext = extrapolate(itp_S, Flat())
+    return (T = _boundary_interpolator(lons, lats, deps, T_data),
+            S = _boundary_interpolator(lons, lats, deps, S_data))
+end
 
-    # Return callable functions supporting both (lon, lat, z) and (lon, lat, z, t) -> value
-    # Time dimension is handled by the sponge relaxation, not interpolation
-    T_fn = (lon, lat, z, t=0.0) -> Float64(itp_T_ext(Float64(lon), Float64(lat), Float64(z)))
-    S_fn = (lon, lat, z, t=0.0) -> Float64(itp_S_ext(Float64(lon), Float64(lat), Float64(z)))
+"""
+    build_boundary_velocity_interpolators_geodata(vel_file; u_name = "uo", v_name = "vo",
+                                                  months = [1]) -> NamedTuple
 
-    return (T = T_fn, S = S_fn)
+Build (lon, lat, z, t) interpolators for the boundary zonal and meridional velocity.
+
+This is the quantity the momentum sponge relaxes toward, and it is the one the
+temperature-and-salinity boundary cannot supply: a sponge that fixes what the incoming
+water *is* and not how fast it is *going* constrains a domain whose open edges are its
+main water source on two hand-entered numbers.
+
+The depth sign is the model's (negative down), and the value substituted for a column
+with no valid velocity is ZERO rather than the domain mean. A mean flow substituted
+for missing data is a current invented out of nothing, and the momentum sponge would
+then drive the interior toward it; still water is at least an honest statement that
+nothing is known there.
+
+The interpolation is in time-independent form: the result is a monthly climatology, and
+the tidal signal is supplied separately by the tidal forcing.
+"""
+function build_boundary_velocity_interpolators_geodata(
+    vel_file::AbstractString;
+    u_name::AbstractString = "uo", v_name::AbstractString = "vo",
+    months::Vector{Int} = [1]
+)
+    ds = geoload(vel_file)
+    lons, lats, deps = _boundary_axes(ds)
+
+    u_data = _boundary_variable_data(ds, u_name, months)
+    v_data = _boundary_variable_data(ds, v_name, months)
+
+    plon, plat, pdep = _boundary_permutations(lons, lats, deps)
+    lons, lats, deps = lons[plon], lats[plat], deps[pdep]
+    u_data = _apply_boundary_permutation(u_data, plon, plat, pdep)
+    v_data = _apply_boundary_permutation(v_data, plon, plat, pdep)
+
+    _fill_boundary_nans!(u_data, deps)
+    _fill_boundary_nans!(v_data, deps)
+    _replace_boundary_nans!(u_data, 0.0)
+    _replace_boundary_nans!(v_data, 0.0)
+
+    return (u = _boundary_interpolator(lons, lats, deps, u_data),
+            v = _boundary_interpolator(lons, lats, deps, v_data))
 end
